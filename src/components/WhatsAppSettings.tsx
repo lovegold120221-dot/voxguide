@@ -82,8 +82,8 @@ export function WhatsAppSettings({ userId, waPermissions, onTogglePermission }: 
 
   return (
     <section className="space-y-3">
-      <h2 className="text-[11px] font-['SF_Pro_Text',system-ui,sans-serif] font-bold tracking-[0.2em] uppercase text-white/40 mb-3 px-1">WhatsApp Integration</h2>
-      <div className="bg-white/[0.02] backdrop-blur-md border border-white/[0.04] rounded-3xl shadow-[0_8px_32px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-300 hover:border-white/[0.07] hover:bg-white/[0.03]">
+      <h2 className="text-[11px] font-bold tracking-[0.2em] uppercase text-[var(--text-muted)] mb-3 px-1">WhatsApp Integration</h2>
+      <div className="rounded-2xl border border-[var(--border)] overflow-hidden bg-[var(--bg-card)]">
         <div className="p-5 flex flex-col gap-4">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2 bg-black/35 px-3 py-1.5 rounded-full border border-white/[0.02]">
@@ -134,7 +134,7 @@ export function WhatsAppSettings({ userId, waPermissions, onTogglePermission }: 
           </div>
 
           {waStatus !== 'paired' && (
-            <div className="flex flex-col gap-3 pt-3 border-t border-white/[0.04]">
+            <div className="flex flex-col gap-3 pt-3 border-t border-[var(--border-light)]">
               <label className="text-[10px] uppercase tracking-[0.15em] text-zinc-500 font-bold px-1">Pairing Option</label>
               <div className="grid grid-cols-2 gap-1.5 bg-black/40 p-1 rounded-2xl border border-white/[0.02]">
                 <button
@@ -306,7 +306,7 @@ export function WhatsAppSettings({ userId, waPermissions, onTogglePermission }: 
         </div>
 
         {waStatus === 'paired' && (
-          <div className="border-t border-white/[0.04] bg-white/[0.005]">
+          <div className="border-t border-[var(--border-light)]">
             {[
               { key: 'send_messages', label: 'Send Messages', desc: 'Allow Beatrice to send texts on your behalf' },
               { key: 'read_chats', label: 'Read Chats', desc: 'Scan and digest incoming WhatsApp messages' },
@@ -316,20 +316,29 @@ export function WhatsAppSettings({ userId, waPermissions, onTogglePermission }: 
               { key: 'send_group_messages', label: 'Send Group Messages', desc: 'Post announcements or chat replies to groups' },
               { key: 'read_group_chats', label: 'Read Group Chats', desc: 'Follow and analyze group discussions' },
               { key: 'view_message_history', label: 'View Message History', desc: 'Read past conversation logs' },
+              { key: 'access_images', label: 'Images', desc: 'Access photos and images shared in chats' },
+              { key: 'access_videos', label: 'Videos', desc: 'Access video messages and recordings' },
+              { key: 'access_audio', label: 'Audio & Voice Notes', desc: 'Access voice messages and audio files' },
+              { key: 'access_documents', label: 'Documents', desc: 'Access PDFs, spreadsheets, presentations and other files' },
+              { key: 'access_stickers', label: 'Stickers & GIFs', desc: 'Access sticker and GIF messages' },
+              { key: 'access_contact_cards', label: 'Contact Cards', desc: 'Access shared contact cards' },
+              { key: 'access_location', label: 'Location Messages', desc: 'Access shared location pins' },
+              { key: 'access_links', label: 'Links', desc: 'Access URLs and link previews shared in chats' },
+              { key: 'access_polls', label: 'Polls', desc: 'Access poll messages and voting data' },
               { key: 'make_calls', label: 'Make Phone Calls', desc: 'Dial contacts from your phonebook via the native dialer' },
               { key: 'make_whatsapp_calls', label: 'WhatsApp Calls', desc: 'Initiate WhatsApp voice or video calls to contacts' },
             ].map((p, i, arr) => (
-              <div key={p.key} className={`px-5 py-4 flex items-center justify-between transition-colors duration-300 hover:bg-white/[0.01] ${i !== arr.length - 1 ? 'border-b border-white/[0.03]' : ''}`}>
+              <div key={p.key} className={`px-5 py-4 flex items-center justify-between transition-colors duration-300 ${i !== arr.length - 1 ? 'border-b border-[var(--border-light)]' : ''}`}>
                 <div className="flex flex-col gap-0.5 pr-4">
-                  <span className="text-[14px] text-white font-['SF_Pro_Text',system-ui,sans-serif] font-semibold tracking-tight">{p.label}</span>
-                  <span className="text-[11px] text-white/40 font-['SF_Pro_Text',system-ui,sans-serif] font-medium leading-relaxed">{p.desc}</span>
+                  <span className="text-[14px] text-[var(--text-primary)] font-semibold tracking-tight">{p.label}</span>
+                  <span className="text-[11px] text-[var(--text-muted)] font-medium leading-relaxed">{p.desc}</span>
                 </div>
                 <button
                   onClick={() => onTogglePermission(p.key)}
                   aria-pressed={waPermissions[p.key]}
                   aria-label={`Toggle ${p.label} permission`}
                   title={`Toggle ${p.label} permission`}
-                  className={`w-10 h-6 rounded-full transition-all duration-300 flex items-center shrink-0 cursor-pointer ${waPermissions[p.key] ? 'bg-[#d0a78b] shadow-[0_0_10px_rgba(208,167,139,0.3)]' : 'bg-zinc-800'}`}
+                  className={`w-10 h-6 rounded-full transition-all duration-300 flex items-center shrink-0 cursor-pointer ${waPermissions[p.key] ? 'bg-[var(--accent)]' : 'bg-zinc-800'}`}
                 >
                   <span className={`block w-4.5 h-4.5 rounded-full bg-white transition-all duration-300 shadow-md ${waPermissions[p.key] ? 'ml-[18px]' : 'ml-[3px]'}`} />
                 </button>

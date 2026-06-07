@@ -14,10 +14,8 @@ import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import { WhatsAppManager } from './whatsapp';
 import * as waTools from './whatsapp-tools';
 import * as belgianTools from './belgian-tools';
-import { GowaClient } from './gowa-client';
-
 const app = express();
-const PORT = process.env.SANDBOX_PORT ? parseInt(process.env.SANDBOX_PORT) : 4200;
+const PORT = parseInt(process.env.PORT || process.env.SANDBOX_PORT || '4200');
 
 app.use(cors({
   origin: '*',
@@ -33,37 +31,24 @@ app.use((_req, res, next) => {
 
 app.use(express.json({ limit: '10mb' }));
 
-// ── WhatsApp Provider: Gowa (preferred) or Baileys (fallback) ──
-const useGowa = !!process.env.GOWA_API_URL;
-let waManager: WhatsAppManager | null = null;
-let gowaClient: GowaClient | null = null;
+// ── WhatsApp Provider: Baileys ──
+let waManager: WhatsAppManager | null = new WhatsAppManager();
+waManager.resumeExistingSessions();
 
-if (useGowa) {
-  const gowaUrl = process.env.GOWA_API_URL!;
-  const gowaAuth = (process.env.GOWA_API_AUTH || 'admin:120221').split(':');
-  gowaClient = new GowaClient(gowaUrl, gowaAuth[0], gowaAuth[1]);
-  console.log(`[Gowa] Using Go WhatsApp at ${gowaUrl}`);
-} else {
-  waManager = new WhatsAppManager();
-  waManager.resumeExistingSessions();
-}
-
-// Server Housekeeping: Run every 30 minutes (Baileys only, gowa handles itself)
-if (!useGowa) {
-  setInterval(() => {
-    try {
-       console.log('[Housekeeping] Starting periodic cleanup...');
-       for (const [userId, entry] of (waManager as any)['sessions'].entries()) {
-          if ((entry.status === 'error' || entry.status === 'disconnected') && !entry.reconnecting) {
-             console.log(`[Housekeeping] Evicting idle session: ${userId}`);
-             (waManager as any)['sessions'].delete(userId);
-          }
-       }
-    } catch (e) {
-       console.error('[Housekeeping] Error:', e);
-    }
-  }, 30 * 60 * 1000);
-}
+// Server Housekeeping: Run every 30 minutes
+setInterval(() => {
+  try {
+     console.log('[Housekeeping] Starting periodic cleanup...');
+     for (const [userId, entry] of (waManager as any)['sessions'].entries()) {
+        if ((entry.status === 'error' || entry.status === 'disconnected') && !entry.reconnecting) {
+           console.log(`[Housekeeping] Evicting idle session: ${userId}`);
+           (waManager as any)['sessions'].delete(userId);
+        }
+     }
+  } catch (e) {
+     console.error('[Housekeeping] Error:', e);
+  }
+}, 30 * 60 * 1000);
 
 // ── Root route: serve the frontend if dist/ exists, otherwise show a message ──
 const distPath = path.join(__dirname, '..', 'dist');
@@ -292,125 +277,9 @@ app.post('/api/ollama/generate', async (req, res) => {
   }
 });
 
-// ── WhatsApp Routes ──
-// Uses Gowa provider when GOWA_API_URL is set, otherwise falls back to Baileys
+// ── WhatsApp Routes (Baileys) ──
 
 const getMsg = (e: any) => e?.message || String(e);
-
-// Helper: route through active provider
-function getApiUserId(userId: string) {
-  return userId;
-}
-
-// ── Gowa Provider Routes ──
-if (gowaClient) {
-
-  app.post('/api/whatsapp/pair', async (req, res) => {
-    try {
-      const { userId, phoneNumber } = req.body;
-      if (!userId) { res.status(400).json({ error: 'userId required' }); return; }
-      const result = await gowaClient!.startPairing(userId, phoneNumber);
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: getMsg(err) });
-    }
-  });
-
-  app.get('/api/whatsapp/status/:userId', async (req, res) => {
-    try {
-      const status = await gowaClient!.getFullStatus(req.params.userId);
-      res.json(status);
-    } catch (err: any) {
-      res.status(500).json({ error: getMsg(err) });
-    }
-  });
-
-  app.get('/api/whatsapp/qr/:userId', async (req, res) => {
-    try {
-      const status = await gowaClient!.getFullStatus(req.params.userId);
-      if (!status.qrCode) {
-        res.status(404).json({ error: 'QR not available', status: status.status });
-        return;
-      }
-      const base64 = status.qrCode.replace(/^data:image\/png;base64,/, '');
-      res.setHeader('Cache-Control', 'no-store');
-      res.type('png').send(Buffer.from(base64, 'base64'));
-    } catch (err: any) {
-      res.status(500).json({ error: getMsg(err) });
-    }
-  });
-
-  app.post('/api/whatsapp/disconnect', async (req, res) => {
-    try {
-      const { userId } = req.body;
-      if (!userId) { res.status(400).json({ error: 'userId required' }); return; }
-      const deviceId = await gowaClient!.getDeviceIdForUser(userId);
-      if (deviceId) {
-        try { await gowaClient!.logout(deviceId); } catch { /* ignore gowa logout errors */ }
-        gowaClient!.clearQrCache(deviceId);
-      }
-      gowaClient!.removeSession(userId);
-      res.json({ ok: true });
-    } catch (err: any) {
-      res.status(500).json({ error: getMsg(err) });
-    }
-  });
-
-  app.post('/api/whatsapp/send', async (req, res) => {
-    try {
-      const { userId, to, text } = req.body;
-      if (!userId || !to || !text) { res.status(400).json({ error: 'userId, to, text required' }); return; }
-      const deviceId = await gowaClient!.getDeviceIdForUser(userId);
-      if (!deviceId) { res.status(400).json({ error: 'WhatsApp not paired. Please pair first.' }); return; }
-      const result = await gowaClient!.sendTextMessage(deviceId, to, text);
-      res.json({ ok: true, result });
-    } catch (err: any) {
-      res.status(500).json({ error: getMsg(err) });
-    }
-  });
-
-  app.post('/api/whatsapp/tool', async (req, res) => {
-    try {
-      const { userId, tool } = req.body;
-      const params = req.body.params || {};
-      if (!userId || !tool) { res.status(400).json({ error: 'userId and tool required' }); return; }
-      // For gowa, delegate to the existing tool handler with gowa context
-      // Tool execution still requires Baileys for now — or we proxy through gowa
-      if (tool === 'sendMessage' || tool === 'sendGroupMessage') {
-        const deviceId = await gowaClient!.getDeviceIdForUser(userId);
-        if (!deviceId) { res.json({ ok: false, error: 'WhatsApp not paired.' }); return; }
-        const to = params.to || params.jid || params.groupId || params.groupName || '';
-        const text = params.text || '';
-        if (!to || !text) { res.json({ ok: false, error: 'recipient and text required' }); return; }
-        const result = await gowaClient!.sendTextMessage(deviceId, to, text);
-        res.json({ ok: true, result });
-      } else {
-        // For read-only tools, try gowa first, fall back to Baileys if available
-        if (waManager) {
-          const result = await waTools.handleWhatsAppAction(waManager, userId, tool, params, req.body.permissions);
-          res.json(result);
-        } else {
-          res.json({ ok: false, error: `Tool "${tool}" not available on gowa provider yet.` });
-        }
-      }
-    } catch (err: any) {
-      res.status(500).json({ error: getMsg(err) });
-    }
-  });
-
-  // Gowa doesn't support these — return empty/disconnected
-  app.get('/api/whatsapp/messages/:userId', (_req, res) => res.json({ messages: [] }));
-  app.get('/api/whatsapp/webhook/:userId', (_req, res) => res.sendStatus(403));
-  app.post('/api/whatsapp/webhook/:userId', (_req, res) => res.json({ ok: true }));
-
-  console.log('[Gowa] All WhatsApp routes mounted for gowa provider');
-
-  // Periodic QR cache cleanup (every 60s)
-  setInterval(() => gowaClient!.pruneQrCache(), 60_000);
-
-} else if (waManager) {
-
-  // ── Baileys Provider Routes (fallback) ──
 
   app.post('/api/whatsapp/pair', async (req, res) => {
     try {
@@ -480,6 +349,57 @@ if (gowaClient) {
       if (!userId || !config) { res.status(400).json({ error: 'userId and config required' }); return; }
       const saved = waManager!.saveAdminConfig(userId, config);
       res.json({ ok: true, config: saved });
+    } catch (err: any) {
+      res.status(500).json({ error: getMsg(err) });
+    }
+  });
+
+  app.get('/api/whatsapp/admin/config/:userId', async (req, res) => {
+    try {
+      const config = waManager!.getAdminConfigPublic(req.params.userId);
+      res.json({ ok: true, config });
+    } catch (err: any) {
+      res.status(500).json({ error: getMsg(err) });
+    }
+  });
+
+  app.get('/api/whatsapp/permissions/:userId', async (req, res) => {
+    try {
+      const config = waManager!.getAdminConfigPublic(req.params.userId);
+      res.json({ ok: true, permissions: config.permissions, restrictedContacts: config.restrictedContacts, restrictedChats: config.restrictedChats });
+    } catch (err: any) {
+      res.status(500).json({ error: getMsg(err) });
+    }
+  });
+
+  app.post('/api/whatsapp/permissions', async (req, res) => {
+    try {
+      const { userId, permissions } = req.body;
+      if (!userId || !permissions) { res.status(400).json({ error: 'userId and permissions required' }); return; }
+      const saved = waManager!.saveAdminConfig(userId, { permissions });
+      res.json({ ok: true, permissions: saved.permissions });
+    } catch (err: any) {
+      res.status(500).json({ error: getMsg(err) });
+    }
+  });
+
+  app.post('/api/whatsapp/restrict/contact', async (req, res) => {
+    try {
+      const { userId, contactJid, restricted } = req.body;
+      if (!userId || !contactJid) { res.status(400).json({ error: 'userId and contactJid required' }); return; }
+      const saved = waManager!.setContactRestriction(userId, contactJid, restricted !== false);
+      res.json({ ok: true, restrictedContacts: saved.restrictedContacts });
+    } catch (err: any) {
+      res.status(500).json({ error: getMsg(err) });
+    }
+  });
+
+  app.post('/api/whatsapp/restrict/chat', async (req, res) => {
+    try {
+      const { userId, chatJid, restricted } = req.body;
+      if (!userId || !chatJid) { res.status(400).json({ error: 'userId and chatJid required' }); return; }
+      const saved = waManager!.setChatRestriction(userId, chatJid, restricted !== false);
+      res.json({ ok: true, restrictedChats: saved.restrictedChats });
     } catch (err: any) {
       res.status(500).json({ error: getMsg(err) });
     }
@@ -588,7 +508,41 @@ if (gowaClient) {
     }
   });
 
-}
+// ── WhatsApp Real-Time SSE Stream ──
+// Frontend connects to this endpoint to receive incoming WhatsApp messages live
+app.get('/api/whatsapp/stream/:userId', (req, res) => {
+  const userId = req.params.userId;
+  if (!waManager) { res.status(503).json({ error: 'WhatsApp not available' }); return; }
+
+  // Set SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  // Send initial keepalive
+  res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
+
+  const onMessage = (msg: any) => {
+    try {
+      res.write(`data: ${JSON.stringify({ type: 'message', data: msg })}\n\n`);
+    } catch {}
+  };
+
+  waManager.onSseConnect(userId, onMessage);
+
+  // Keepalive every 30s
+  const keepalive = setInterval(() => {
+    try { res.write(`:keepalive\n\n`); } catch { clearInterval(keepalive); }
+  }, 30000);
+
+  // Cleanup on disconnect
+  req.on('close', () => {
+    clearInterval(keepalive);
+    waManager?.onSseDisconnect(userId, onMessage);
+  });
+});
 
 // ── Web Architect (Website Builder) Routes ──
 
@@ -686,6 +640,127 @@ app.get('/site-build/:userId/:timestamp', async (req, res) => {
     res.send(data.html_content);
   } catch (err: any) {
     res.status(500).send('Internal Server Error');
+  }
+});
+
+// ── Sandbox Sub-Agent Runner ──
+// Runs complex tasks via OpenCode CLI or direct Gemini API call
+// Returns only a summary to keep the main agent's context clean
+
+import { execSync } from 'child_process';
+
+const OPENCODE_PATH = process.env.OPENCODE_PATH || '/opt/homebrew/bin/opencode';
+
+app.post('/api/sandbox/run', async (req, res) => {
+  try {
+    const { task_description, task_type, timeout } = req.body;
+    if (!task_description) {
+      res.status(400).json({ error: 'task_description is required' });
+      return;
+    }
+
+    const safeTimeout = Math.min(Math.max(Number(timeout) || 60, 10), 300);
+    const safeDesc = String(task_description).slice(0, 4000);
+    const safeType = String(task_type || 'auto').toLowerCase();
+
+    let resultText: string;
+    let agentUsed: string;
+
+    if (safeType === 'opencode' || safeType === 'code') {
+      // OpenCode CLI for coding tasks
+      const stdout = execSync(
+        `${OPENCODE_PATH} run ${JSON.stringify(safeDesc)} --timeout ${safeTimeout}`,
+        { encoding: 'utf-8', timeout: safeTimeout * 1000, maxBuffer: 10 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+      resultText = stdout.trim();
+      agentUsed = 'opencode';
+    } else {
+      // Use the new @google/genai SDK (v1.x) for general tasks
+      const { GoogleGenAI } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+      const modelsToTry = ['gemini-2.5-flash-native-audio-preview-12-2025', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+      let response: any;
+      let lastModelErr: string = '';
+      for (const modelName of modelsToTry) {
+        try {
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: [
+              { role: 'user', parts: [{ text: 'You are a sandbox sub-agent. Complete the following task and return the result. Be thorough but concise.' }] },
+              { role: 'user', parts: [{ text: safeDesc }] },
+            ],
+            config: { temperature: 0.3, maxOutputTokens: 4096 },
+          });
+          if (response?.text) break;
+        } catch (e: any) {
+          lastModelErr = e.message || '';
+          continue;
+        }
+      }
+      if (!response?.text) throw new Error(`All Gemini models failed. Last error: ${lastModelErr}`);
+      resultText = response.text || '[No response from sandbox]';
+      agentUsed = 'gemini-api';
+    }
+
+    // Truncate to keep context clean
+    const maxLength = 8000;
+    const truncated = resultText.length > maxLength;
+    const finalResult = truncated ? resultText.slice(0, maxLength) + '\n...[truncated]' : resultText;
+
+    res.json({
+      ok: true,
+      result: finalResult,
+      truncated,
+      task_type: safeType,
+      agent: agentUsed,
+    });
+  } catch (err: any) {
+    console.error('Sandbox error:', err.message?.slice(0, 200));
+    res.status(500).json({ error: err.message?.slice(0, 500) || 'Sandbox execution failed' });
+  }
+});
+
+// ── Cerebras + Browser-Use Sandbox ──
+// Delegates browser automation tasks to a Cerebras-powered Browser-Use agent
+// Requires: pip install browser-use && playwright install
+
+const CEREBRAS_SCRIPT = path.join(__dirname, '..', 'scripts', 'cerebras_browser.py');
+const CEREBRAS_PYTHON = process.env.CEREBRAS_PYTHON || path.join(__dirname, '..', '.venv', 'bin', 'python3');
+
+app.post('/api/cerebras/browser', async (req, res) => {
+  try {
+    const { task, model, timeout } = req.body;
+    if (!task) {
+      res.status(400).json({ error: 'task is required' });
+      return;
+    }
+
+    const safeTask = String(task).slice(0, 2000).replace(/"/g, '\\"');
+    const safeModel = String(model || 'gpt-oss-120b').slice(0, 50);
+    const safeTimeout = Math.min(Math.max(Number(timeout) || 60, 10), 300);
+
+    const cmd = `"${CEREBRAS_PYTHON}" "${CEREBRAS_SCRIPT}" --task "${safeTask}" --model "${safeModel}" --timeout ${safeTimeout}`;
+
+    const stdout = execSync(cmd, {
+      encoding: 'utf-8',
+      timeout: (safeTimeout + 10) * 1000,
+      maxBuffer: 10 * 1024 * 1024,
+      env: { ...process.env, CEREBRAS_API_KEY: process.env.CEREBRAS_API_KEY || '' },
+    });
+
+    const result = JSON.parse(stdout.trim());
+    res.json(result);
+  } catch (err: any) {
+    // Try to parse JSON from stderr or partial output
+    try {
+      const partial = err.stdout || err.message || '';
+      const parsed = JSON.parse(partial.trim().split('\n').filter((l: string) => l.startsWith('{')).pop() || '{}');
+      if (parsed.ok !== undefined) { res.json(parsed); return; }
+    } catch {}
+    res.status(500).json({
+      ok: false,
+      error: err.message?.slice(0, 500) || 'Cerebras browser task failed',
+    });
   }
 });
 

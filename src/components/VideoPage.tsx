@@ -219,7 +219,7 @@ export function VideoPage({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 bg-black flex flex-col h-[100dvh]"
+      className="min-h-screen bg-[var(--bg-base)] text-[var(--text-primary)] flex flex-col h-[100dvh]"
       onClick={handleTap}
     >
       <canvas ref={canvasRef} className="hidden" />
@@ -258,7 +258,7 @@ export function VideoPage({
         <div className="w-9" />
       </header>
 
-      <div className="flex-1 flex items-center justify-center relative bg-black">
+      <div className="flex-1 flex items-center justify-center relative video-viewport-dark">
         {hasStream ? (
           <video
             ref={localVideoRef}

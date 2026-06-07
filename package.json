@@ -10,6 +10,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
+    "start": "tsx server/index.ts",
     "lint": "tsc --noEmit",
     "docker:whatsapp:build": "docker compose -f docker-compose.whatsapp.yml build",
     "docker:whatsapp:up": "docker compose -f docker-compose.whatsapp.yml up",
@@ -20,6 +21,7 @@
     "@google/genai": "^1.29.0",
     "@google/generative-ai": "^0.24.1",
     "@hapi/boom": "^10.0.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@supabase/supabase-js": "^2.106.2",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
@@ -31,6 +33,7 @@
     "express": "^4.21.2",
     "firebase": "^12.12.1",
     "html2canvas": "^1.4.1",
+    "http-proxy": "^1.18.1",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
@@ -41,7 +44,8 @@
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-markdown": "^10.1.0",
-    "swagger-ui-express": "^5.0.1"
+    "swagger-ui-express": "^5.0.1",
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",

@@ -10,18 +10,52 @@ import {
   linkWithPopup,
   reauthenticateWithPopup
 } from 'firebase/auth';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Sun, Moon } from 'lucide-react';
 import { EntryFlow } from './components/EntryFlow';
 import { AuthPage } from './components/AuthPage';
 import { BeatriceAgent } from './components/BeatriceAgent';
 import { WhatsAppPortal } from './components/WhatsAppPortal';
 import { WhatsAppOnboarding } from './components/WhatsAppOnboarding';
 
+/* ── Theme system ── */
+type Theme = 'dark' | 'light';
+
+function getInitialTheme(): Theme {
+  try {
+    const stored = localStorage.getItem('beatrice_theme');
+    if (stored === 'light' || stored === 'dark') return stored;
+  } catch {}
+  // Default to dark — respects the app's existing design
+  return 'dark';
+}
+
+function applyTheme(theme: Theme) {
+  const root = document.documentElement;
+  root.classList.remove('theme-dark', 'theme-light');
+  root.classList.add(`theme-${theme}`);
+  root.style.colorScheme = theme;
+  // Update meta theme-color for mobile status bar
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', theme === 'dark' ? '#050505' : '#f5f1ea');
+}
+
 export default function App() {
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
   const [showEntryFlow, setShowEntryFlow] = useState(true);
+
+  // Apply theme class to <html> on mount and changes
+  useEffect(() => { applyTheme(theme); }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem('beatrice_theme', next); } catch {}
+      return next;
+    });
+  }, []);
   const [authLanguage, setAuthLanguage] = useState(() => {
     try { return localStorage.getItem('beatrice_language') || 'en'; } catch { return 'en'; }
   });
@@ -226,6 +260,8 @@ export default function App() {
       onSetLanguage={setAuthLanguage}
       onLogout={handleLogout}
       onLogin={handleLogin}
+      theme={theme}
+      onToggleTheme={toggleTheme}
     />
   );
 }

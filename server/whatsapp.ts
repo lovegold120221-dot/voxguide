@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import P from 'pino';
 import QRCode from 'qrcode';
+import { EventEmitter } from 'events';
 import { supabase } from './supabase';
 
 type WaStatus = 'init' | 'qr_ready' | 'paired' | 'disconnected' | 'error';
@@ -23,6 +24,15 @@ const WA_PERMISSION_KEYS = [
   'send_group_messages',
   'read_group_chats',
   'view_message_history',
+  'access_images',
+  'access_videos',
+  'access_audio',
+  'access_documents',
+  'access_stickers',
+  'access_contact_cards',
+  'access_location',
+  'access_links',
+  'access_polls',
 ] as const;
 
 type WaPermission = typeof WA_PERMISSION_KEYS[number];
@@ -32,6 +42,7 @@ export interface WaRecentMessage {
   chatId: string;
   from: string;
   fromName?: string;
+  pushName?: string;
   body: string;
   timestamp: number;
   fromMe: boolean;
@@ -70,6 +81,8 @@ interface WaAdminConfig {
   webhookVerifyToken: string;
   defaultCountryCode: string;
   permissions: Record<WaPermission, boolean>;
+  restrictedContacts: string[];
+  restrictedChats: string[];
   updatedAt: string;
 }
 
@@ -85,6 +98,8 @@ export interface WaAdminConfigInput {
   webhookVerifyToken?: string;
   defaultCountryCode?: string;
   permissions?: Partial<Record<WaPermission, boolean>>;
+  restrictedContacts?: string[];
+  restrictedChats?: string[];
 }
 
 export interface WaAdminConfigPublic {
@@ -99,6 +114,8 @@ export interface WaAdminConfigPublic {
   hasWebhookVerifyToken: boolean;
   defaultCountryCode: string;
   permissions: Record<WaPermission, boolean>;
+  restrictedContacts: string[];
+  restrictedChats: string[];
   updatedAt: string | null;
 }
 
@@ -257,9 +274,30 @@ function writeSessionData(entry: WaSession) {
   fs.writeFileSync(entry.dataFile, JSON.stringify(payload, null, 2));
 }
 
-export class WhatsAppManager {
+export class WhatsAppManager extends EventEmitter {
   private sessions = new Map<string, WaSession>();
   private authRoot = process.env.WA_AUTH_ROOT || path.join(process.cwd(), '.baileys_auth');
+  private sseClients = new Map<string, Set<(msg: any) => void>>();
+
+  // ── SSE (Server-Sent Events) for real-time message streaming ──
+  onSseConnect(userId: string, callback: (msg: any) => void) {
+    if (!this.sseClients.has(userId)) this.sseClients.set(userId, new Set());
+    this.sseClients.get(userId)!.add(callback);
+  }
+
+  onSseDisconnect(userId: string, callback: (msg: any) => void) {
+    this.sseClients.get(userId)?.delete(callback);
+    if (this.sseClients.get(userId)?.size === 0) this.sseClients.delete(userId);
+  }
+
+  private emitNewMessage(userId: string, msg: any) {
+    const clients = this.sseClients.get(userId);
+    if (clients) {
+      for (const cb of clients) {
+        try { cb(msg); } catch {}
+      }
+    }
+  }
 
   async resumeExistingSessions(): Promise<void> {
     if (!fs.existsSync(this.authRoot)) return;
@@ -490,6 +528,7 @@ export class WhatsAppManager {
             chatId,
             from: msg.key?.participant || msg.key?.remoteJid || '',
             fromName: msg.key?.fromMe ? 'Me' : undefined,
+            pushName: msg.pushName || undefined,
             body: body.slice(0, 1000),
             timestamp: timestampMs(msg.messageTimestamp),
             fromMe: !!msg.key?.fromMe,
@@ -500,8 +539,25 @@ export class WhatsAppManager {
           };
           entry.recentMessages.unshift(record);
 
-          // Capture public profile name (pushName) from incoming messages to pair it with the JID
-          if (chatId && chatId.endsWith('@s.whatsapp.net') && msg.pushName) {
+          // Emit new message to SSE clients for real-time streaming
+          this.emitNewMessage(userId, record);
+
+          // Capture public profile name (pushName) from incoming messages
+          const senderJid = msg.key?.participant || chatId;
+          if (senderJid && senderJid.endsWith('@s.whatsapp.net') && msg.pushName) {
+            const existing = entry.contacts[senderJid];
+            const savedName = existing?.name && existing.name !== senderJid ? existing.name : '';
+            const notifyName = msg.pushName || existing?.notify || '';
+            entry.contacts[senderJid] = {
+              id: senderJid,
+              name: savedName || notifyName || senderJid,
+              notify: notifyName || undefined,
+              verifiedName: existing?.verifiedName || undefined,
+              number: jidNumber(senderJid),
+            };
+          }
+          // Also capture pushName for the chat itself (1-on-1 chats)
+          if (chatId && chatId.endsWith('@s.whatsapp.net') && msg.pushName && senderJid !== chatId) {
             const existing = entry.contacts[chatId];
             const savedName = existing?.name && existing.name !== chatId ? existing.name : '';
             const notifyName = msg.pushName || existing?.notify || '';
@@ -551,6 +607,7 @@ export class WhatsAppManager {
             chatId,
             from: msg.key?.participant || msg.key?.remoteJid || '',
             fromName: msg.key?.fromMe ? 'Me' : undefined,
+            pushName: msg.pushName || undefined,
             body: body.slice(0, 1000),
             timestamp: timestampMs(msg.messageTimestamp),
             fromMe: !!msg.key?.fromMe,
@@ -619,6 +676,8 @@ export class WhatsAppManager {
       hasWebhookVerifyToken: !!config.webhookVerifyToken,
       defaultCountryCode: config.defaultCountryCode,
       permissions: config.permissions,
+      restrictedContacts: config.restrictedContacts || [],
+      restrictedChats: config.restrictedChats || [],
       updatedAt: config.updatedAt || null,
     };
   }
@@ -635,6 +694,8 @@ export class WhatsAppManager {
       apiVersion: input.apiVersion?.trim() || current.apiVersion || 'v23.0',
       defaultCountryCode: cleanPhoneNumber(input.defaultCountryCode || current.defaultCountryCode),
       permissions: input.permissions ? normalizePermissions(input.permissions) : current.permissions,
+      restrictedContacts: Array.isArray(input.restrictedContacts) ? input.restrictedContacts : (current.restrictedContacts || []),
+      restrictedChats: Array.isArray(input.restrictedChats) ? input.restrictedChats : (current.restrictedChats || []),
       updatedAt: new Date().toISOString(),
       accessToken: input.accessToken?.trim() ? input.accessToken.trim() : current.accessToken,
       appSecret: input.appSecret?.trim() ? input.appSecret.trim() : current.appSecret,
@@ -657,6 +718,36 @@ export class WhatsAppManager {
       approvedByUser: request.approvedByUser,
       mode: request.mode,
     };
+  }
+
+  getPermission(userId: string, permissionKey: string): boolean {
+    const config = this.readAdminConfig(userId);
+    return config.permissions?.[permissionKey as WaPermission] ?? true;
+  }
+
+  isChatRestricted(userId: string, chatId: string): boolean {
+    const config = this.readAdminConfig(userId);
+    const restrictedChats = config.restrictedChats || [];
+    const restrictedContacts = config.restrictedContacts || [];
+    return restrictedChats.includes(chatId) || restrictedContacts.some(contactId => chatId.startsWith(contactId.split('@')[0]));
+  }
+
+  setContactRestriction(userId: string, contactJid: string, restricted: boolean): WaAdminConfigPublic {
+    const config = this.readAdminConfig(userId);
+    const restrictedContacts = config.restrictedContacts || [];
+    const updated = restricted
+      ? (restrictedContacts.includes(contactJid) ? restrictedContacts : [...restrictedContacts, contactJid])
+      : restrictedContacts.filter(jid => jid !== contactJid);
+    return this.saveAdminConfig(userId, { restrictedContacts: updated });
+  }
+
+  setChatRestriction(userId: string, chatJid: string, restricted: boolean): WaAdminConfigPublic {
+    const config = this.readAdminConfig(userId);
+    const restrictedChats = config.restrictedChats || [];
+    const updated = restricted
+      ? (restrictedChats.includes(chatJid) ? restrictedChats : [...restrictedChats, chatJid])
+      : restrictedChats.filter(jid => jid !== chatJid);
+    return this.saveAdminConfig(userId, { restrictedChats: updated });
   }
 
   async sendCloudTextMessage(userId: string, to: string, text: string): Promise<{ chatId: string; messageId?: string } | null> {
@@ -804,7 +895,9 @@ export class WhatsAppManager {
   getRecentMessages(userId: string, limit = 20): WaRecentMessage[] {
     const entry = this.sessions.get(userId);
     if (!entry) return [];
-    return entry.recentMessages.slice(0, Math.min(limit, MAX_MESSAGES));
+    return entry.recentMessages
+      .filter(msg => !this.isChatRestricted(userId, msg.chatId))
+      .slice(0, Math.min(limit, MAX_MESSAGES));
   }
 
   async getChats(userId: string, limit = 20): Promise<WaChatSummary[]> {
@@ -813,6 +906,7 @@ export class WhatsAppManager {
 
     const byId = new Map<string, WaChatSummary>();
     for (const msg of entry.recentMessages) {
+      if (this.isChatRestricted(userId, msg.chatId)) continue;
       const current = byId.get(msg.chatId);
       if (!current || msg.timestamp >= current.timestamp) {
         const name = await this.resolveNameFromAnywhere(userId, msg.chatId);
@@ -886,7 +980,7 @@ export class WhatsAppManager {
     if (!entry?.contacts) return [];
 
     return Object.values(entry.contacts)
-      .filter(contact => contact.id.endsWith('@s.whatsapp.net'))
+      .filter(contact => contact.id.endsWith('@s.whatsapp.net') && !this.isChatRestricted(userId, contact.id))
       .slice(0, Math.min(limit, 500));
   }
 
@@ -1094,20 +1188,23 @@ export class WhatsAppManager {
     const sock = this.getClient(userId);
     if (!sock) return [];
     const groups = await sock.groupFetchAllParticipating();
-    return Object.entries(groups).map(([id, meta]: [string, any]) => ({
-      id,
-      name: meta.subject || id,
-      unreadCount: 0,
-      lastMessage: '',
-      timestamp: timestampMs(meta.creation),
-      isGroup: true,
-    }));
+    return Object.entries(groups)
+      .filter(([id]) => !this.isChatRestricted(userId, id))
+      .map(([id, meta]: [string, any]) => ({
+        id,
+        name: meta.subject || id,
+        unreadCount: 0,
+        lastMessage: '',
+        timestamp: timestampMs(meta.creation),
+        isGroup: true,
+      }));
   }
 
   async getMessageHistory(userId: string, chatId: string, limit = 20): Promise<WaRecentMessage[]> {
     const entry = this.sessions.get(userId);
     if (!entry) return [];
     const jid = toWhatsAppJid(chatId, chatId.endsWith('@g.us'));
+    if (this.isChatRestricted(userId, jid)) return [];
     const messages = entry.recentMessages
       .filter(message => message.chatId === jid)
       .sort((a, b) => b.timestamp - a.timestamp) // Newest first
@@ -1145,25 +1242,9 @@ export class WhatsAppManager {
     if (!entry) return { ok: false, error: 'Session not found' };
     if (!entry.sock) return { ok: false, error: 'Not connected' };
 
-    entry.recentMessages = [];
-    entry.messageById = new Map();
+    // Preserve existing messages — don't clear them. Just reconnect to get new ones.
     this.clearSaveTimer(entry);
     this.clearReconnectTimer(entry);
-
-    // Reset Baileys creds to force a fresh messaging-history.set on reconnect
-    try {
-      const credsPath = path.join(entry.authDir, 'creds.json');
-      if (fs.existsSync(credsPath)) {
-        const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
-        creds.accountSyncCounter = 0;
-        delete creds.lastAccountSyncTimestamp;
-        delete creds.processedHistoryMessages;
-        fs.writeFileSync(credsPath, JSON.stringify(creds));
-        console.log(`[WhatsApp] Reset history sync creds for ${userId}`);
-      }
-    } catch (err: any) {
-      console.error(`[WhatsApp] Failed to reset creds for ${userId}:`, err.message);
-    }
 
     try {
       await entry.sock.end(undefined).catch(() => {});
@@ -1588,6 +1669,8 @@ export class WhatsAppManager {
       webhookVerifyToken: '',
       defaultCountryCode: '32',
       permissions: defaultPermissions(),
+      restrictedContacts: [],
+      restrictedChats: [],
       updatedAt: '',
     };
 
@@ -1599,6 +1682,8 @@ export class WhatsAppManager {
         ...parsed,
         provider: parsed.provider === 'cloud_api' ? 'cloud_api' : 'linked_device',
         permissions: normalizePermissions(parsed.permissions),
+        restrictedContacts: Array.isArray(parsed.restrictedContacts) ? parsed.restrictedContacts : [],
+        restrictedChats: Array.isArray(parsed.restrictedChats) ? parsed.restrictedChats : [],
       };
     } catch {
       return fallback;

@@ -1,0 +1,65 @@
+services:
+  - type: web_service
+    name: zero-backend
+    runtime: node
+    repo: https://github.com/lovegold120221-dot/zero.git
+    branch: main
+    autoDeploy: yes
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: VITE_GEMINI_API_KEY
+        sync: false
+      - key: IMAGE_GEN_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_BUSINESS_ACCOUNT_ID
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: VITE_GOOGLE_CLIENT_ID
+        sync: false
+      - key: VITE_FIREBASE_API_KEY
+        sync: false
+      - key: VITE_FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: VITE_FIREBASE_DATABASE_URL
+        sync: false
+      - key: VITE_FIREBASE_PROJECT_ID
+        sync: false
+      - key: VITE_FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: VITE_FIREBASE_MESSAGING_SENDER_ID
+        sync: false
+      - key: VITE_FIREBASE_APP_ID
+        sync: false
+      - key: WA_LOG_LEVEL
+        value: silent
+      - key: WA_SYNC_FULL_HISTORY
+        value: "true"
+      - key: WA_HISTORY_LIMIT
+        value: "50000"
+      - key: WA_HISTORY_RESPONSE_LIMIT
+        value: "2000"
+      - key: SANDBOX_ROOT
+        value: /opt/render/.sandbox
+      - key: WA_AUTH_ROOT
+        value: /opt/render/.baileys_auth

@@ -9,6 +9,15 @@ const ALL_PERMISSIONS = [
   'send_group_messages',
   'read_group_chats',
   'view_message_history',
+  'access_images',
+  'access_videos',
+  'access_audio',
+  'access_documents',
+  'access_stickers',
+  'access_contact_cards',
+  'access_location',
+  'access_links',
+  'access_polls',
 ] as const;
 
 type Permission = typeof ALL_PERMISSIONS[number];

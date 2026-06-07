@@ -2,21 +2,19 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-# Install native dependencies for some node modules (like puppeteer/canvas if needed)
+# Install native dependencies for puppeteer/better-sqlite3
 RUN apk add --no-cache python3 make g++ chromium
 
 # Environment variables for puppeteer
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
+    NODE_ENV=production
 
 COPY package*.json ./
-RUN npm install
+RUN npm ci --omit=dev || npm install
 
 COPY . .
 
-# Expose Vite port (3000) and API port (if any, typically 3001)
-EXPOSE 3000 3001
+EXPOSE 10000
 
-USER node
-
-CMD ["npm", "run", "dev:full"]
+CMD ["node", "--import", "tsx", "server/index.ts"]

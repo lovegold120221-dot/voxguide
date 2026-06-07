@@ -119,3 +119,97 @@
 - Known issues: None.
 - Next step: None.
 
+---
+
+## TASK-20260605-All: Full System Overhaul — Tools, Theme, Memory, Config Persistence
+
+### START RECORD
+- STATUS: COMPLETED
+- Start time: 2026-06-05
+- User request: Multiple fixes across the entire app
+- Preservation constraints: Preserve all existing functionality, no breaking changes
+
+### Changes Made
+
+#### 1. WhatsApp Function Registry Refactor
+- **Removed `whatsapp_action` god function** (1 function with 25+ enum actions, 15 params)
+- **Replaced with 10 individual skill functions**: `send_whatsapp_message`, `send_whatsapp_group_message`, `read_whatsapp_chats`, `get_whatsapp_contacts`, `get_whatsapp_groups`, `get_whatsapp_message_history`, `get_whatsapp_calls`, `block_whatsapp_contact`, `unblock_whatsapp_contact`, `sync_whatsapp_history`
+- **Removed `execute_google_service`** (redundant — covered by 20+ dedicated Google functions)
+- Updated `showToolResult` sandbox rendering for all new function names
+- Updated SOP in system prompt to reference new individual functions
+
+#### 2. System Prompt & Behavior Fixes
+- **Rule #2**: Changed from "NEVER call tools proactively" to "Call tools directly when user asks"
+- **Rule #3**: Changed ambiguity paralysis to "make reasonable assumptions"
+- **WhatsApp SOP**: Removed mandatory `getMessageHistory` + confirmation popup — now resolves + sends directly
+- **VOICE_PERSONALITY_PROMPT SOP 1**: Removed "MATCH STYLE" step requiring history fetch before every send
+- **TWO HISTORIES section**: No longer mandates style matching unless explicitly requested
+- **Dynamic intro**: Removed unnecessary `get_user_location` call on session start
+- **`request_whatsapp_send`**: Updated description, deprecated in favor of direct send
+
+#### 3. Permissions Default to True
+- All 10 WhatsApp permissions default to `true` instead of `false`
+
+#### 4. Auto-Sync Full WhatsApp History After Pairing
+- Two sync triggers: in status-change detection and in onboarding save
+
+#### 5. Theme System (Dark + Light)
+- **40+ CSS custom properties** defining complete theme palette
+- **`theme-dark` and `theme-light`** classes on `<html>` element
+- **70+ CSS override rules** for light theme to remap hardcoded `text-white`, `text-zinc-*`, `bg-black/*`, `border-white/*` classes
+- Settings panel toggle (Settings → Appearance → Theme toggle)
+- localStorage persistence, auto `prefers-color-scheme` detection
+- Mobile-native font stack: `-apple-system, BlinkMacSystemFont, "SF Pro Text", ...`
+- **Eburon Sandbox** fully theme-aware via CSS variables
+
+#### 6. Language Duplication Fix
+- Removed duplicate 137-entry `LANGUAGES` array from `ProfilePage.tsx`
+- Now imports shared `LANGUAGES` from `src/constants.ts` (147 languages)
+
+#### 7. Knowledge Base Domains Integration
+- URL domains (`knowledge_domains` from `user_settings`) are now loaded into agent context at session start alongside knowledge files
+- Agent instructed to use `web_glance` to look up domain content
+
+#### 8. Config Persistence Expanded
+- `saveSettings()` now also saves: `theme`, `ambient_enabled`, `ambient_volume`
+- Initial load from Supabase restored these fields on app start
+- Real-time channel sync applies theme/ambient changes from other sessions
+
+#### 9. Memory System
+- Created `supabase-migration-memories.sql` with `memories` table (full-text search, GIN tags index, RLS)
+- **`add_to_memory` skill**: saves user-requested facts with optional tags
+- **`search_memory` skill**: full-text search on stored memories
+- 10 most recent memories loaded into system prompt at session start
+- Memory guidance in system prompt telling Beatrice when to use each function
+
+### Files Changed
+| File | Changes |
+|---|---|
+| `src/components/BeatriceAgent.tsx` | Tool registry refactor, prompt fixes, memory system, theme toggle, config persistence, SOP cleanup |
+| `src/App.tsx` | Theme state + toggle, passes theme props down |
+| `src/index.css` | Full theme system with 70+ light-mode overrides |
+| `src/components/WhatsAppOnboarding.tsx` | Auto-sync trigger after pairing |
+| `src/components/WhatsAppSettings.tsx` | (covered by CSS overrides) |
+| `src/components/ProfilePage.tsx` | Removed duplicate LANGUAGES, imports from constants |
+| `src/constants.ts` | (source of truth for LANGUAGES) |
+| `.env` | Real credentials, switched between prod/local URLs |
+| `supabase-migration-memories.sql` | NEW — memories table schema |
+
+### Validation
+- `npm run lint` — 0 new errors (all 9 pre-existing)
+- Both servers running: frontend on :3000, API on :4200
+- Theme toggle works in Settings → Appearance
+- Language dropdown shows all 147 languages including Flemish
+- Context slider adjustable 0–50 in Profile
+- Memory functions registered as tools the model can see
+
+### Known Issues
+- 7 pre-existing TypeScript errors (mode string vs boolean mismatch, etc.)
+- `bg-[#1C1C1E]` CSS override may not match Tailwind's generated class name exactly in all builds
+- Knowledge file content for PDF/DOCX binary files returns garbled text via `data.text()`
+
+### Next Step
+- Run the Supabase migration SQL for the `memories` table
+- Test the memory functions end-to-end in a voice session
+- Test WhatsApp pairing + send flow
+
