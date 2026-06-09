@@ -865,7 +865,7 @@ async function callHermesMultitask(
   timeoutSec: number,
   maxTokens = 8192,
 ): Promise<{ content: string; model: string }> {
-  const hermesModel = process.env.HERMES_MODEL || 'hermes3:latest';
+  const hermesModel = process.env.HERMES_MODEL || 'eburon-multimodal-pro:latest';
 
   const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
     method: 'POST',
@@ -1208,7 +1208,7 @@ app.post('/api/sandbox/run', async (req, res) => {
 
     } else if (safeType === 'hermes' || safeType === 'multitask') {
       // Hermes Multitask Agent — direct routing with all Hermes skills
-      setTaskProgress(task, 'running', { agent: 'hermes_multitask' });
+      setTaskProgress(task, 'running', { agent: 'eburon_multimodal_pro' });
       try {
         const hermesResult = await callHermesMultitask(
           HERMES_MULTITASK_SYSTEM,
@@ -1217,10 +1217,10 @@ app.post('/api/sandbox/run', async (req, res) => {
           32768,
         );
         resultText = hermesResult.content;
-        agentUsed = `hermes-multitask (${hermesResult.model})`;
+        agentUsed = `eburon-multimodal-pro (${hermesResult.model})`;
         if (!resultText || resultText.length < 5) throw new Error('Empty or too short response');
       } catch (hermesErr: any) {
-        throw new Error(`Hermes Multitask failed: ${hermesErr.message}`);
+        throw new Error(`Eburon Multimodal Pro failed: ${hermesErr.message}`);
       }
 
     } else {
@@ -1242,9 +1242,9 @@ app.post('/api/sandbox/run', async (req, res) => {
         agentUsed = 'eburon_sandbox';
         if (!resultText || resultText.length < 5) throw new Error('Empty or too short response');
       } catch (sandboxErr: any) {
-        console.warn('[Sandbox] Eburon Sandbox failed, falling back to Hermes Multitask:', sandboxErr.message?.slice(0, 100));
-        // Fallback 1: Hermes Multitask
-        setTaskProgress(task, 'running', { agent: 'hermes_multitask', message: 'Falling back to Hermes Multitask' });
+        console.warn('[Sandbox] Eburon Sandbox failed, falling back to Eburon Multimodal Pro:', sandboxErr.message?.slice(0, 100));
+        // Fallback 1: Eburon Multimodal Pro
+        setTaskProgress(task, 'running', { agent: 'eburon_multimodal_pro', message: 'Falling back to Eburon Multimodal Pro' });
         try {
           const hermesResult = await callHermesMultitask(
             HERMES_MULTITASK_SYSTEM,
@@ -1253,7 +1253,7 @@ app.post('/api/sandbox/run', async (req, res) => {
             32768,
           );
           resultText = hermesResult.content;
-          agentUsed = `hermes-multitask (${hermesResult.model})`;
+          agentUsed = `eburon-multimodal-pro (${hermesResult.model})`;
           if (!resultText || resultText.length < 5) throw new Error('Empty or too short response');
         } catch {
           // Fallback 2: Cerebras
@@ -1274,7 +1274,7 @@ app.post('/api/sandbox/run', async (req, res) => {
               resultText = eburonResult.text || '[No response from sandbox]';
               agentUsed = 'eburon_worker';
             } catch (e: any) {
-              throw new Error(`All agents failed (Eburon Sandbox + Hermes + Cerebras + Eburon Worker). Last error: ${e.message}`);
+              throw new Error(`All agents failed (Eburon Sandbox + Eburon Multimodal Pro + Cerebras + Eburon Worker). Last error: ${e.message}`);
             }
           }
         }
