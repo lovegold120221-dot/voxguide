@@ -242,63 +242,84 @@ export async function generateEburonSandbox(params: {
   };
 
   const timeoutSec = Math.min(params.timeoutSec ?? 180, 300);
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
+  const maxRetries = 3;
+  let lastError: Error | null = null;
 
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      },
-    );
-
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      console.error(`[Eburon Sandbox] HTTP ${res.status}: ${errBody.slice(0, 300)}`);
-      throw new Error(`[Eburon Sandbox] HTTP ${res.status}`);
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(1000 * Math.pow(2, attempt), 15000);
+      console.warn(`[Eburon Sandbox] Retry ${attempt}/${maxRetries} after ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
     }
 
-    const rawText = await res.text();
-    const lines = rawText.split('\n').filter((l) => l.trim());
-    let fullText = '';
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
 
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const payload = line.slice(6).trim();
-      if (payload === '[DONE]') break;
-      try {
-        const chunk = JSON.parse(payload);
-        const parts = chunk?.candidates?.[0]?.content?.parts;
-        if (parts) {
-          for (const part of parts) {
-            if (part.text) fullText += part.text;
-          }
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        },
+      );
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => '');
+        console.error(`[Eburon Sandbox] HTTP ${res.status}: ${errBody.slice(0, 300)}`);
+        if (res.status === 429 && attempt < maxRetries - 1) {
+          lastError = new Error(`[Eburon Sandbox] HTTP ${res.status}`);
+          continue;
         }
-      } catch {
-        // skip unparseable chunks
+        throw new Error(`[Eburon Sandbox] HTTP ${res.status}`);
       }
-    }
 
-    if (!fullText || fullText.length < 5) {
-      throw new Error('[Eburon Sandbox] Empty or too short response');
-    }
+      const rawText = await res.text();
+      const lines = rawText.split('\n').filter((l) => l.trim());
+      let fullText = '';
 
-    return { text: fullText, modelId };
-  } catch (err: any) {
-    clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
-      throw new Error(`[Eburon Sandbox] Timed out after ${timeoutSec}s`);
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') break;
+        try {
+          const chunk = JSON.parse(payload);
+          const parts = chunk?.candidates?.[0]?.content?.parts;
+          if (parts) {
+            for (const part of parts) {
+              if (part.text) fullText += part.text;
+            }
+          }
+        } catch {
+          // skip unparseable chunks
+        }
+      }
+
+      if (!fullText || fullText.length < 5) {
+        throw new Error('[Eburon Sandbox] Empty or too short response');
+      }
+
+      return { text: fullText, modelId };
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        throw new Error(`[Eburon Sandbox] Timed out after ${timeoutSec}s`);
+      }
+      if (err.message?.startsWith('[Eburon Sandbox] HTTP 429') && attempt < maxRetries - 1) {
+        lastError = err;
+        continue;
+      }
+      if (err.message?.startsWith('[Eburon Sandbox]')) throw err;
+      console.error('[Eburon Sandbox] Stream failed:', err.message || err);
+      throw new Error('[Eburon Sandbox] Stream failed');
     }
-    if (err.message?.startsWith('[Eburon Sandbox]')) throw err;
-    console.error('[Eburon Sandbox] Stream failed:', err.message || err);
-    throw new Error('[Eburon Sandbox] Stream failed');
   }
+
+  throw lastError || new Error(`[Eburon Sandbox] All ${maxRetries} attempts failed`);
 }
 
 // ── Startup validation ──
