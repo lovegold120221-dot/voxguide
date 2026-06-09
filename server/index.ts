@@ -865,10 +865,9 @@ ARTIFACT OUTPUT RULES (for web/document/visual tasks):
 When asked to create websites, documents, dashboards, or visual artifacts:
 * Return complete standalone HTML with <!DOCTYPE html>
 * All CSS in <style>, all JS in <script>
-* Use real Pixabay images (key: 55202515-e90b22c5f5f95ded6a90cef65)
-* Fetch: https://pixabay.com/api/?key=55202515-e90b22c5f5f95ded6a90cef65&q=TOPIC&image_type=photo&per_page=10
-* Extract webformatURL/largeImageURL from responses
-* Never use placeholder images (unsplash, placeholder.com, picsum)
+* Use real Pixabay images from the "REAL PIXABAY IMAGES" section in the system prompt if available
+* Never make up image URLs or use placeholder services (unsplash, placeholder.com, picsum)
+* Fall back to CSS gradients / SVG if no real images are pre-fetched
 * Attribution: "Images courtesy of Pixabay" at page bottom
 * Mobile-first responsive, 2+ breakpoints, semantic HTML
 * Production-quality, filled with meaningful content
@@ -1046,12 +1045,12 @@ If the user asks for a business document, create a printable professional docume
 
 If the user asks for a website, create a FULL production-style responsive webpage with:
 * Navigation bar with logo, menu items, and CTA button
-* Hero section with headline, subtext, and a REAL Pixabay background image
+* Hero section with headline, subtext, and a background image (use REAL PIXABAY IMAGES from prompt if available, otherwise CSS gradient)
 * Features/services section with icon cards
 * About/testimonials section
 * Pricing or stats section if applicable
 * Contact section or footer with links
-* All images MUST be real Pixabay images fetched via urlContext tool
+* All images MUST be from the REAL PIXABAY IMAGES section in the system prompt; never make up URLs
 * Use modern CSS: flexbox/grid, CSS variables, smooth transitions, hover effects
 * Make it look like a finished, deployed production website — not a wireframe
 Display inside the live preview viewer.
@@ -1091,55 +1090,13 @@ DESIGN REQUIREMENTS:
 * Keep the page self-contained.
 * Do not rely on external CSS files.
 * Do not rely on external JavaScript files.
-* NEVER use placeholder images. ALWAYS use real Pixabay images via urlContext tool.
+* NEVER use placeholder images. Use the REAL PIXABAY IMAGES provided in the prompt section above, or fall back to CSS gradients / SVG.
 
-PIXABAY IMAGE ASSET RULES (CRITICAL):
-
-You have access to real-time URL fetching via the urlContext tool. Use it to actively query Pixabay for real images. NEVER generate placeholder or lorem image URLs.
-
-* API Key: 55202515-e90b22c5f5f95ded6a90cef65
-* Image search: https://pixabay.com/api/?key=55202515-e90b22c5f5f95ded6a90cef65&q=SEARCH_TERM&image_type=photo&per_page=10&safesearch=true
-* Video search: https://pixabay.com/api/videos/?key=55202515-e90b22c5f5f95ded6a90cef65&q=SEARCH_TERM&per_page=10&safesearch=true
-
-HOW TO FETCH AND USE REAL IMAGES:
-
-1. BEFORE writing img tags, use the urlContext tool to fetch: https://pixabay.com/api/?key=55202515-e90b22c5f5f95ded6a90cef65&q=YOUR_TOPIC_KEYWORDS&image_type=photo&per_page=10&safesearch=true
-
-2. From the JSON response, extract real image URLs:
-   - webformatURL (640px wide) → use for cards, thumbnails, grid items
-   - largeImageURL (1280px wide) → use for hero sections, banners, full-width images
-   - previewURL (150px) → use for tiny thumbnails
-
-3. Embed these REAL URLs directly into your HTML img src attributes. Example:
-   <img src="https://pixabay.com/get/abc123_640.jpg" alt="Description" loading="lazy">
-   Do NOT make up URLs. Use the actual URLs from the Pixabay JSON response.
-
-4. SEARCH TERM STRATEGY:
-   - Restaurant website → q=food+restaurant+interior
-   - Tech startup → q=technology+office+modern
-   - Travel agency → q=travel+destination+landscape
-   - Real estate → q=house+architecture+modern
-   - Health/fitness → q=fitness+gym+health
-   - Education → q=education+library+school
-   - Derive keywords from the user's topic
-   - Use 2-4 word English search terms, URL-encode spaces as +
-   - Prefer image_type=photo for realistic visuals
-   - Add orientation=horizontal for hero/banner images
-   - Add category parameter for relevant results (nature, business, food, technology, etc.)
-
-5. FOR EVERY VISUAL ELEMENT that needs an image:
-   - Hero section → fetch 1 image (largeImageURL)
-   - Card grid → fetch per_page matching the number of cards
-   - Gallery → fetch per_page=12 or more
-   - Team section → fetch with q=portrait+professional
-   - Background → fetch with q=abstract+background+texture
-
-6. ATTRIBUTION: Add this line at page bottom when using Pixabay:
-   <p style="font-size:11px;color:#888;text-align:center;padding:8px;">Images courtesy of <a href="https://pixabay.com" style="color:#888;">Pixabay</a></p>
-
-7. FALLBACK: Only if Pixabay returns zero results, use CSS gradients, SVG illustrations, or inline CSS art. But ALWAYS attempt Pixabay first.
-
-8. FORBIDDEN: NEVER use urls from unsplash, placeholder.com, picsum.photos, loremflickr, or any other placeholder service. ONLY Pixabay.
+IMAGE RULES:
+* Check if a "## REAL PIXABAY IMAGES" section exists in the system prompt above with inline <img> tags showing real Pixabay serve URLs. If so, extract those exact img src URLs and use them in your output.
+* If no REAL PIXABAY IMAGES section exists, create your own visuals using CSS gradients, SVG illustrations, or inline CSS art.
+* FORBIDDEN: NEVER use urls from unsplash, placeholder.com, picsum.photos, loremflickr, or any other fake placeholder service.
+* REQUIRED: Add attribution at page bottom: <p style="font-size:11px;color:#888;text-align:center;padding:8px;">Images courtesy of <a href="https://pixabay.com" style="color:#888;">Pixabay</a></p>
 
 LIVE PREVIEW REQUIREMENTS:
 
@@ -1200,6 +1157,33 @@ function extractRawHtml(value: string) {
   throw new Error('Sandbox did not return a valid HTML artifact.');
 }
 
+// ── Server-side Pixabay image fetcher ──
+const PIXABAY_API_KEY = '55202515-e90b22c5f5f95ded6a90cef65';
+
+async function fetchPixabayImages(keyword: string, count = 3): Promise<string[]> {
+  try {
+    const url = `https://pixabay.com/api/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(keyword)}&image_type=photo&per_page=${count}&safesearch=true`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return [];
+    const data: any = await res.json();
+    return (data.hits || []).slice(0, count).map((hit: any) => hit.webformatURL);
+  } catch {
+    return [];
+  }
+}
+
+function extractImageKeywords(description: string, taskType: string): string[] {
+  if (taskType === 'website') {
+    const keywords = description
+      .replace(/website|landing|page|create|make|build|design|simple|basic|modern|clean|beautiful/gi, '')
+      .split(/[\s,]+/)
+      .filter(w => w.length > 2 && !['for','with','the','and','that','this'].includes(w.toLowerCase()))
+      .slice(0, 3);
+    return keywords.length > 0 ? keywords : ['nature', 'business', 'technology'];
+  }
+  return ['nature', 'business', 'technology'];
+}
+
 app.post('/api/sandbox/run', async (req, res) => {
   try {
     const { task_description, task_type, timeout, taskId } = req.body;
@@ -1239,7 +1223,22 @@ app.post('/api/sandbox/run', async (req, res) => {
       const artifactTypes = new Set([
         'document', 'website', 'writing', 'analysis', 'research', 'dashboard', 'app', 'artifact',
       ]);
-      const systemPrompt = artifactTypes.has(safeType) ? XERO_HTML_SYSTEM : 'You are a helpful assistant. Complete the task and return the result concisely.';
+      const needsImages = safeType === 'website';
+      let systemPrompt = artifactTypes.has(safeType) ? XERO_HTML_SYSTEM : 'You are a helpful assistant. Complete the task and return the result concisely.';
+
+      // Pre-fetch real Pixabay images and inject into prompt
+      if (needsImages) {
+        const keywords = extractImageKeywords(safeDesc, safeType);
+        const imageSets = await Promise.all(keywords.map(k => fetchPixabayImages(k)));
+        const allImages = imageSets.flat().filter(Boolean);
+        if (allImages.length > 0) {
+          systemPrompt += `\n\n## REAL PIXABAY IMAGES (use these exact URLs)\nThe following images were fetched live from Pixabay for this task. Use them directly in your HTML output.\n\n`;
+          for (const img of allImages) {
+            systemPrompt += `<img src="${img}" alt="Pixabay image" loading="lazy" style="max-width:400px">\n`;
+          }
+          systemPrompt += `\nImages courtesy of https://pixabay.com\n`;
+        }
+      }
 
       // Primary: Eburon Sandbox (streaming model with thinking + tools)
       setTaskProgress(task, 'running', { agent: 'eburon_sandbox' });
