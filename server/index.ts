@@ -979,6 +979,49 @@ async function callHermesMultitask(
   return { content, model: hermesModel };
 }
 
+async function callQwenCoder(
+  systemPrompt: string,
+  userPrompt: string,
+  timeoutSec: number,
+  maxTokens = 16384,
+): Promise<{ content: string; model: string }> {
+  const modelName = 'qwen2.5-coder:3b';
+
+  const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: modelName,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      stream: false,
+      options: {
+        num_predict: maxTokens,
+        temperature: 0.6,
+        top_p: 0.9,
+        repeat_penalty: 1.1,
+      },
+    }),
+    signal: AbortSignal.timeout(timeoutSec * 1000),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => '');
+    throw new Error(`Qwen Coder (${modelName}): ${response.status} ${errBody.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const content = data.message?.content || '';
+
+  if (!content || content.length < 3) {
+    throw new Error('Qwen Coder returned empty response');
+  }
+
+  return { content, model: modelName };
+}
+
 async function callCerebras(systemPrompt: string, userPrompt: string, timeoutSec: number, maxTokens = 8192, attempt = 1): Promise<{ content: string; model: string }> {
   const apiKey = process.env.CEREBRAS_API_KEY;
   if (!apiKey) throw new Error('CEREBRAS_API_KEY not configured');
@@ -1277,11 +1320,8 @@ app.post('/api/sandbox/run', async (req, res) => {
       }
 
     } else {
-      const artifactTypes = new Set([
-        'document', 'website', 'writing', 'analysis', 'research', 'dashboard', 'app', 'artifact',
-      ]);
       const needsImages = safeType === 'website';
-      let systemPrompt = artifactTypes.has(safeType) ? XERO_HTML_SYSTEM : 'You are a helpful assistant. Complete the task and return the result concisely.';
+      let systemPrompt = ['document', 'website', 'writing', 'analysis', 'research', 'dashboard', 'app', 'artifact'].includes(safeType) ? XERO_HTML_SYSTEM : 'You are a helpful assistant. Complete the task and return the result concisely.';
 
       // Pre-fetch real Pixabay images and inject into prompt
       if (needsImages) {
@@ -1332,17 +1372,26 @@ app.post('/api/sandbox/run', async (req, res) => {
             agentUsed = 'cerebras-gpt-oss-120b';
             if (!resultText || resultText.length < 5) throw new Error('Empty or too short response');
           } catch {
-            // Fallback 3: Eburon Worker
-            setTaskProgress(task, 'running', { agent: 'eburon_worker', message: 'Falling back to Eburon Worker' });
+            // Fallback 2.5: Qwen Coder (local Ollama, no API limits)
+            setTaskProgress(task, 'running', { agent: 'qwen2.5-coder', message: 'Falling back to Qwen Coder 3B' });
             try {
-              const eburonResult = await generateEburonWorker({
-                prompt: safeDesc,
-                systemInstruction: systemPrompt,
-              });
-              resultText = eburonResult.text || '[No response from sandbox]';
-              agentUsed = 'eburon_worker';
-            } catch (e: any) {
-              throw new Error(`All agents failed (Eburon Sandbox + Eburon Multimodal Pro + Cerebras + Eburon Worker). Last error: ${e.message}`);
+              const qwenResult = await callQwenCoder(systemPrompt, safeDesc, Math.min(safeTimeout, 240), 16384);
+              resultText = qwenResult.content;
+              agentUsed = 'qwen2.5-coder:3b';
+              if (!resultText || resultText.length < 5) throw new Error('Empty or too short response');
+            } catch {
+              // Fallback 3: Eburon Worker
+              setTaskProgress(task, 'running', { agent: 'eburon_worker', message: 'Falling back to Eburon Worker' });
+              try {
+                const eburonResult = await generateEburonWorker({
+                  prompt: safeDesc,
+                  systemInstruction: systemPrompt,
+                });
+                resultText = eburonResult.text || '[No response from sandbox]';
+                agentUsed = 'eburon_worker';
+              } catch (e: any) {
+                throw new Error(`All agents failed (Eburon Sandbox + Eburon Multimodal Pro + Cerebras + Qwen Coder + Eburon Worker). Last error: ${e.message}`);
+              }
             }
           }
         }
