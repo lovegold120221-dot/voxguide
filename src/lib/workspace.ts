@@ -1,7 +1,7 @@
 export interface WorkspaceOutput {
   id: string;
   userId: string;
-  type: 'document' | 'image' | 'screenshot' | 'capture';
+  type: 'document' | 'image' | 'screenshot' | 'capture' | 'app';
   title: string;
   textContent?: string;       // HTML/text for documents
   blobData?: ArrayBuffer;     // Binary for images

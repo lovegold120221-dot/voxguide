@@ -460,14 +460,16 @@ export function ProfilePage({
               <div className="p-6 text-center">
                 <Folder className="w-8 h-8 text-zinc-600 mx-auto mb-2" />
                 <p className="text-[15px] text-zinc-500">No outputs yet.</p>
-                <p className="text-[13px] text-zinc-600 mt-1">Documents, images, and captures from Beatrice will appear here.</p>
+                <p className="text-[13px] text-zinc-600 mt-1">Documents, websites, apps, and captures from Beatrice will appear here.</p>
               </div>
             ) : (
               workspaceOutputs.map((w, i) => (
                 <div key={w.id} className={`p-4 flex items-center justify-between ${i !== workspaceOutputs.length - 1 ? 'border-b border-white/5' : ''}`}>
                   <div className="flex items-center gap-3 min-w-0 flex-1 pr-4">
                     <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center shrink-0">
-                      {w.type === 'image' || w.type === 'screenshot' || w.type === 'capture' ? (
+                      {w.type === 'app' ? (
+                        <Globe className="w-4 h-4 text-zinc-400" />
+                      ) : w.type === 'image' || w.type === 'screenshot' || w.type === 'capture' ? (
                         <Image className="w-4 h-4 text-zinc-400" />
                       ) : (
                         <FileText className="w-4 h-4 text-zinc-400" />
@@ -497,7 +499,18 @@ export function ProfilePage({
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {w.textContent && (
+                    {w.type === 'app' && w.textContent ? (
+                      <a
+                        href={w.textContent}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-2 rounded-full active:bg-white/5 text-zinc-500 hover:text-[#d0a78b] transition-colors"
+                        aria-label="Open app"
+                        title="Open app"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    ) : w.textContent && (
                       <button
                         onClick={() => setPreviewItem(w)}
                         className="p-2 rounded-full active:bg-white/5 text-zinc-500 hover:text-[#d0a78b] transition-colors"

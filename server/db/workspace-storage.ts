@@ -6,7 +6,7 @@ const DATA_DIR = path.resolve(process.env.WORKSPACE_DATA_DIR || '/data/workspace
 export interface WorkspaceOutput {
   id: string;
   userId: string;
-  type: 'document' | 'image' | 'screenshot' | 'capture';
+  type: 'document' | 'image' | 'screenshot' | 'capture' | 'app';
   title: string;
   textContent?: string;
   mimeType: string;

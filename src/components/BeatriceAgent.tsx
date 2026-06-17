@@ -4425,6 +4425,34 @@ ${historyContext}
                           appUrl: data.appUrl || '',
                           appWorkspace: data.appWorkspace || '',
                         };
+                        if (data.appUrl) {
+                          const appTitle = args.appName || (args.task ? args.task.slice(0, 60) : 'Generated App');
+                          const aWsOutput = {
+                            id: `app_${crypto.randomUUID()}`,
+                            userId: user.uid,
+                            type: 'app' as const,
+                            title: appTitle,
+                            textContent: data.appUrl,
+                            mimeType: 'text/html',
+                            fileSize: data.appUrl.length,
+                            createdAt: new Date().toISOString(),
+                          };
+                          saveOutput(aWsOutput).catch(() => {});
+                          syncWorkspaceToServer(aWsOutput);
+                          if (googleTokenRef.current) {
+                            const redirectHtml = `<html><head><meta http-equiv="refresh" content="0;url=${data.appUrl}"></head><body><p><a href="${data.appUrl}">Open app</a></p></body></html>`;
+                            uploadToDrive(gFetch, {
+                              ...aWsOutput,
+                              textContent: redirectHtml,
+                              mimeType: 'text/html',
+                              fileSize: redirectHtml.length,
+                            }).then(driveResult => {
+                              if (driveResult) {
+                                saveOutput({ ...aWsOutput, driveFileId: driveResult.fileId, driveLink: driveResult.link });
+                              }
+                            }).catch(() => {});
+                          }
+                        }
                       } catch (e: any) {
                         result = { ok: false, platform: 'opencode', error: e.message || 'Open terminal skills task failed' };
                       }
@@ -4746,6 +4774,13 @@ ${historyContext}
                         };
                         saveOutput(wsOutput).catch(() => {});
                         syncWorkspaceToServer(wsOutput);
+                        if (googleTokenRef.current) {
+                          uploadToDrive(gFetch, wsOutput).then(driveResult => {
+                            if (driveResult) {
+                              saveOutput({ ...wsOutput, driveFileId: driveResult.fileId, driveLink: driveResult.link });
+                            }
+                          }).catch(() => {});
+                        }
                         result = {
                           ok: true,
                           title,
