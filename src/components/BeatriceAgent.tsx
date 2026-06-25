@@ -33,9 +33,18 @@ import {
 // ─── Eburon provider references ──
 const _VOICE_MODEL = 'eburon_realtime_voice';
 const _TEXT_MODEL = 'eburon_text';
-// Eburon-aliased baseline for the live runtime — used in user-visible logs.
 const _SANDBOX_MODEL_ALIAS = 'eburon_sandbox_worker';
 const _SDK = ['Goo', 'gle', 'Gen', 'AI'].join('');
+
+// ── Suppress WebSocket CLOSING/CLOSED console spam from SDK internals ──
+// The SDK catches ws.send() errors internally and logs them — we can't prevent
+// the call but we can filter the console noise.
+const _origConsoleError = console.error.bind(console);
+console.error = (...args: any[]) => {
+  const msg = args.map(a => typeof a === 'string' ? a : a?.message || '').join(' ');
+  if (msg.includes('WebSocket is already in CLOSING or CLOSED state')) return;
+  _origConsoleError(...args);
+};
 
 // ─── Time formatter for relative timestamps ──
 function getRelativeTimeAgo(diffMs: number): string {
