@@ -37,14 +37,14 @@ const _SANDBOX_MODEL_ALIAS = 'eburon_sandbox_worker';
 const _SDK = ['Goo', 'gle', 'Gen', 'AI'].join('');
 
 // ── Suppress WebSocket CLOSING/CLOSED console spam from SDK internals ──
-// The SDK catches ws.send() errors internally and logs them — we can't prevent
-// the call but we can filter the console noise.
 const _origConsoleError = console.error.bind(console);
-console.error = (...args: any[]) => {
+const _origConsoleWarn = console.warn.bind(console);
+const _wsSpamFilter = (args: any[]) => {
   const msg = args.map(a => typeof a === 'string' ? a : a?.message || '').join(' ');
-  if (msg.includes('WebSocket is already in CLOSING or CLOSED state')) return;
-  _origConsoleError(...args);
+  return !msg.includes('WebSocket is already in CLOSING or CLOSED state');
 };
+console.error = (...args: any[]) => { if (_wsSpamFilter(args)) _origConsoleError(...args); };
+console.warn = (...args: any[]) => { if (_wsSpamFilter(args)) _origConsoleWarn(...args); };
 
 // ─── Time formatter for relative timestamps ──
 function getRelativeTimeAgo(diffMs: number): string {
