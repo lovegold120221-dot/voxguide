@@ -6,8 +6,8 @@
   <a href="https://whatsapp.eburon.ai">
     <img src="https://img.shields.io/badge/Live%20App-whatsapp.eburon.ai-8A2BE2?style=for-the-badge" alt="Live App">
   </a>
-  <a href="https://github.com/lovegold120221-dot/turbo-dollop">
-    <img src="https://img.shields.io/badge/GitHub-turbo--dollop-181717?style=for-the-badge&logo=github" alt="GitHub">
+  <a href="https://github.com/lovegold120221-dot/voice-zero">
+    <img src="https://img.shields.io/badge/GitHub-voice--zero-181717?style=for-the-badge&logo=github" alt="GitHub">
   </a>
 </p>
 
@@ -73,6 +73,7 @@ Data Layer
 - **Proactive Memory** — Beatrice automatically saves user preferences, facts, deadlines, and personal info via `add_to_memory`. Memories persist across sessions and are pre-loaded at session start
 - **Adjustable Context** — Conversation history slider (0–100 messages) controls how much past context Beatrice uses
 - **Sandbox Sub-Agent** — Delegate complex tasks to a cascading AI pipeline (Eburon Sandbox → Multimodal Pro → Cerebras → Coder Pro → Worker)
+- **Local Filesystem Access** — Beatrice can browse, read, and write files on the user's local computer via the browser File System Access API (`showDirectoryPicker`). Supports listing directories, reading text files, and writing/creating files in user-selected folders. Chrome/Edge only.
 - **OpenCode CLI Agent** — Full repository access via OpenCode CLI: read/write files, run commands, build apps, deploy via Dokploy. 21+ installed skills (Flutter, video production, browser automation, YouTube, TikTok, web scraping, machine access)
 - **Cerebras Browser Agent** — Automated web browsing via Browser-Use + Cerebras inference
 - **10 Belgian Admin Tools** — KBO/CBE lookup, VIES VAT validation, Peppol e-invoicing, tax calendar, registration tax calc, itsme navigator, language bridge (FR/NL/EN), social security navigator, labor law simplifier, mobility planner (NMBS/SNCB)
@@ -103,17 +104,15 @@ Works on macOS, Debian, Ubuntu, and Windows. Installs Node.js 22, Python 3.11, C
 
 **macOS / Debian / Ubuntu:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lovegold120221-dot/turbo-dollop/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lovegold120221-dot/voice-zero/main/bootstrap.sh | bash
 ```
 
 **Windows (PowerShell as Administrator):**
 ```powershell
-irm https://raw.githubusercontent.com/lovegold120221-dot/turbo-dollop/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/lovegold120221-dot/voice-zero/main/install.ps1 | iex
 ```
 
-After install completes, edit `~/beatrice/.env` (macOS/Linux) or `%USERPROFILE%\beatrice\.env` (Windows) to fill in your API keys, then restart with `cd ~/beatrice && ./start.sh` (or `start.bat` on Windows). The app runs at `http://localhost:4200`.
-
-On Linux, if run as root, the installer registers a systemd service (`beatrice.service`) that auto-starts on boot.
+The app runs at `http://localhost:4200`.
 
 ### Prerequisites (Manual Install)
 - Node.js 22+
@@ -126,8 +125,8 @@ On Linux, if run as root, the installer registers a systemd service (`beatrice.s
 
 ### Local Development
 ```bash
-git clone https://github.com/lovegold120221-dot/turbo-dollop.git
-cd turbo-dollop
+git clone https://github.com/lovegold120221-dot/voice-zero.git
+cd voice-zero
 npm install
 
 cp .env.example .env

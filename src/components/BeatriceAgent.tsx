@@ -1130,6 +1130,12 @@ export function BeatriceAgent({
   const sandboxLogIndexRef = useRef<number>(0);
   const sandboxScenarioNameRef = useRef<string>('');
 
+  // ── Local filesystem access ──
+  const rootDirRef = useRef<FileSystemDirectoryHandle | null>(null);
+  const connectedFolderNameRef = useRef<string>('');
+  const [awaitingFolderPicker, setAwaitingFolderPicker] = useState(false);
+  const folderPickerResolverRef = useRef<((value: { ok: boolean; name: string } | null) => void) | null>(null);
+
   // Track previous settings values for real-time session updates
   const prevPersonaRef = useRef(personaName);
   const prevTitleRef = useRef(userTitle);
@@ -1530,6 +1536,7 @@ export function BeatriceAgent({
     if (toolName.includes('browser') || toolName.includes('cerebras')) return 'browser';
     if (toolName.includes('document') || toolName.includes('create_doc')) return 'document';
     if (toolName.includes('website') || toolName.includes('generate_web')) return 'website';
+    if (toolName.startsWith('local_')) return 'sandbox';
     return 'sandbox';
   };
 
@@ -1802,6 +1809,29 @@ export function BeatriceAgent({
       } else {
         finalHtml = `<h1>🇧🇪 Belgian Tool Result</h1><div style="background:#1a1b1f; border:1px solid #1f2025; padding:20px; border-radius:18px; font-family:monospace; font-size:12px; color:#d0a78b; white-space:pre-wrap; overflow-x:auto;">${JSON.stringify(result, null, 2)}</div>`;
       }
+    } else if (toolName === 'local_connect_folder' && result?.ok) {
+      finalHtml = `<h1>📁 Folder Connected</h1><div style="background:rgba(16,185,129,0.05); border:1px solid #10b981; padding:20px; border-radius:18px; color:#10b981;"><p style="font-size:16px;">Connected to <strong>"${result.name}"</strong></p><p style="margin-top:8px; font-size:13px; color:#94a3b8;">You can now use local_list_directory, local_read_file, and local_write_file to work with files in this folder.</p></div>`;
+    } else if (toolName === 'local_connect_folder' && result?.error) {
+      finalHtml = `<h1>📁 Folder Connection</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>${result.error}</p></div>`;
+    } else if (toolName === 'local_list_directory' && result?.ok) {
+      const rows = result.entries.map((e: any) => {
+        const icon = e.type === 'directory' ? '📁' : '📄';
+        const size = e.size ? ` • ${(e.size / 1024).toFixed(1)} KB` : '';
+        return `<div class="wa-item"><div class="wa-avatar">${icon}</div><div class="wa-info"><div class="wa-name">${e.name}</div><div class="wa-meta">${e.type}${size}</div></div></div>`;
+      }).join('');
+      finalHtml = `<h1>📂 ${result.folderName}${result.path !== '/' ? ` / ${result.path}` : ''}</h1><p style="font-size:12px; color:#64748b; margin-bottom:16px;">${result.total} items</p>${rows || '<p style="text-align:center; padding:40px; color:#64748b;">This folder is empty.</p>'}`;
+    } else if (toolName === 'local_list_directory' && result?.error) {
+      finalHtml = `<h1>📂 List Directory</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>${result.error}</p></div>`;
+    } else if (toolName === 'local_read_file' && result?.ok) {
+      const escapedContent = result.content.replace(/[&<>"']/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c] || c));
+      const fileInfo = `${result.path} (${(result.size / 1024).toFixed(1)} KB)`;
+      finalHtml = `<h1>📄 ${result.path}</h1><p style="font-size:11px; color:#64748b; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px;">${fileInfo} • ${result.mimeType}</p><div style="background:#1a1b1f; border:1px solid #1f2025; padding:20px; border-radius:18px; font-family:monospace; font-size:12px; color:#d0a78b; white-space:pre-wrap; overflow-x:auto; max-height:500px; overflow-y:auto;"><pre style="margin:0; font-family:inherit; white-space:pre-wrap; word-break:break-word;">${escapedContent}</pre></div>`;
+    } else if (toolName === 'local_read_file' && result?.error) {
+      finalHtml = `<h1>📄 Read File</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>${result.error}</p></div>`;
+    } else if (toolName === 'local_write_file' && result?.ok) {
+      finalHtml = `<h1>✅ File Written</h1><div style="background:rgba(16,185,129,0.05); border:1px solid #10b981; padding:20px; border-radius:18px; color:#10b981;"><p>Successfully wrote <strong>"${result.path}"</strong></p><p style="margin-top:8px; font-size:13px; color:#94a3b8;">${(result.size / 1024).toFixed(1)} KB written.</p></div>`;
+    } else if (toolName === 'local_write_file' && result?.error) {
+      finalHtml = `<h1>✅ Write File</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>${result.error}</p></div>`;
     } else if (toolName === 'analyze_image' && result?.description) {
       const escapedDesc = result.description.replace(/[&<>"']/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c] || c));
       finalHtml = `<h1>🖼️ Image Analysis</h1><div style="background:#1a1b1f; border:1px solid #1f2025; padding:20px; border-radius:18px; font-family:monospace; font-size:13px; color:#f0e6df; white-space:pre-wrap; overflow-x:auto; max-height:500px; overflow-y:auto; line-height:1.6;"><pre style="margin:0; font-family:inherit; white-space:pre-wrap; word-break:break-word;">${escapedDesc}</pre></div>`;
@@ -1858,7 +1888,8 @@ export function BeatriceAgent({
     `;
 
     const backendUrl = getEnv('VITE_BACKEND_URL') || '';
-    const absoluteUrl = result?.url ? (result.url.startsWith('/') ? `${backendUrl}${result.url}` : result.url) : undefined;
+    const resultUrl = result?.url || result?.appUrl || '';
+    const absoluteUrl = resultUrl ? (resultUrl.startsWith('/') ? `${backendUrl}${resultUrl}` : resultUrl) : undefined;
 
     setActiveDocument({
       title: sandboxTitle,
@@ -1890,6 +1921,35 @@ export function BeatriceAgent({
         body: JSON.stringify(output),
       });
     } catch {} // silent fail — IndexedDB is the primary store
+  };
+
+  const handleFolderPickerClick = async () => {
+    try {
+      if (!('showDirectoryPicker' in window)) {
+        if (folderPickerResolverRef.current) {
+          folderPickerResolverRef.current({ ok: false, name: 'showDirectoryPicker not supported in this browser' });
+          folderPickerResolverRef.current = null;
+        }
+        setAwaitingFolderPicker(false);
+        return;
+      }
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      rootDirRef.current = handle;
+      connectedFolderNameRef.current = handle.name;
+      if (folderPickerResolverRef.current) {
+        folderPickerResolverRef.current({ ok: true, name: handle.name });
+        folderPickerResolverRef.current = null;
+      }
+      setAwaitingFolderPicker(false);
+    } catch (e: any) {
+      if (e.name === 'AbortError' || e.message?.includes('dismissed')) {
+        if (folderPickerResolverRef.current) {
+          folderPickerResolverRef.current({ ok: false, name: 'User cancelled folder selection' });
+          folderPickerResolverRef.current = null;
+        }
+      }
+      setAwaitingFolderPicker(false);
+    }
   };
 
   const handleSendChat = async (e: React.FormEvent) => {
@@ -2842,11 +2902,21 @@ I have a comprehensive set of skills at my disposal. Every task the user gives m
 - **How to use OpenCode for maximum autonomy:**
   - Provide a clear, complete task description with file paths, expected outcomes, and constraints
   - For building apps: include an appName (URL-safe), specify standalone HTML/CSS/JS, no build steps needed
+  - For 3D apps, games, visualizations, or any app with 3D graphics/rendering: instruct OpenCode to use Three.js (loaded from CDN via importmap or script tag)
   - For repo work: include file paths and what needs to change
   - OpenCode uses deepseek-v4-flash-free model with full tool access -- it can browse, read, write, run, and deploy autonomously
   - It runs inside /opt/voxx-zero (the project root) and has access to all skills
 - **App URL pattern:** https://whatsapp.eburon.ai/beatrice-workspace/{safe-user-id}/{appName}/
 - Trigger: "build me an app", "create a website", "make a tool", "use OpenCode", "run this command", "inspect the repo", "deploy this", "automate this", "install package", "write a script", "clone repo"
+
+**LOCAL FILESYSTEM SKILLS** -- Browse, read, and write files on the user's local computer
+- local_connect_folder: Ask the user to select a folder on their computer so you can access local files
+- local_list_directory: List files and folders in the connected directory
+- local_read_file: Read the contents of any text file from the connected folder
+- local_write_file: Write or overwrite files in the connected folder
+- Call local_connect_folder first before using the other local_* tools
+- The folder connection persists for the session — the user doesn't need to reconnect for each operation
+- Trigger: "my files", "local folder", "on my computer", "read this file", "save this to my computer", "browse my files", "open this file"
 
 **WEB BROWSING SKILLS** -- Navigate websites, fill forms, extract live data
 - Uses cerebras_browser_task for visiting specific URLs, form filling, extracting structured data from live sites
@@ -3859,6 +3929,49 @@ ${historyContext}
                       system: { type: Type.STRING, description: "Optional system instruction to set context or behavior." }
                     },
                     required: ["prompt"]
+                  }
+                },
+                {
+                  name: "local_connect_folder",
+                  description: "Ask the user to select a local folder on their computer so Beatrice can browse, read, and write files in it. Shows a folder picker dialog. Use this when the user wants you to work with files on their local machine. Call this first before using any other local_* tools.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      reason: { type: Type.STRING, description: "Explain to the user why you need folder access (e.g. 'to read your project files', 'to save the document')." }
+                    }
+                  }
+                },
+                {
+                  name: "local_list_directory",
+                  description: "List all files and subdirectories in the currently connected local folder. Use this to explore what files are available. Requires a connected folder (call local_connect_folder first).",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      path: { type: Type.STRING, description: "Optional subdirectory path relative to the connected folder root. Leave empty to list the root." }
+                    }
+                  }
+                },
+                {
+                  name: "local_read_file",
+                  description: "Read the complete contents of a file from the user's locally connected folder. Returns the file content as text. Requires a connected folder (call local_connect_folder first).",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      path: { type: Type.STRING, description: "Path to the file, relative to the connected folder root (e.g. 'notes.txt', 'src/index.js')." }
+                    },
+                    required: ["path"]
+                  }
+                },
+                {
+                  name: "local_write_file",
+                  description: "Write or overwrite a file in the user's locally connected folder. Creates the file if it doesn't exist. Can also create files in subdirectories. Requires a connected folder (call local_connect_folder first).",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      path: { type: Type.STRING, description: "Path where to write the file, relative to the connected folder root (e.g. 'output.txt', 'src/report.md')." },
+                      content: { type: Type.STRING, description: "The full text content to write to the file." }
+                    },
+                    required: ["path", "content"]
                   }
                 }
               ] as FunctionDeclaration[]
@@ -4913,6 +5026,103 @@ ${historyContext}
                       } catch (e: any) {
                         result = { ok: false, error: e.message || 'Belgian tool call failed' };
                       }
+                    } else if (callName === 'local_connect_folder') {
+                      if (!('showDirectoryPicker' in window)) {
+                        result = { ok: false, error: 'Your browser does not support the File System Access API. Try Chrome or Edge.' };
+                      } else if (rootDirRef.current) {
+                        result = { ok: true, name: connectedFolderNameRef.current, message: `Already connected to folder "${connectedFolderNameRef.current}". Use local_list_directory, local_read_file, or local_write_file to work with files.` };
+                      } else {
+                        try {
+                          setAwaitingFolderPicker(true);
+                          const pickerResult = await new Promise<{ ok: boolean; name: string } | null>((resolve) => {
+                            folderPickerResolverRef.current = resolve;
+                          });
+                          if (pickerResult && pickerResult.ok) {
+                            result = { ok: true, name: pickerResult.name, message: `Connected to folder "${pickerResult.name}". You can now list, read, and write files.` };
+                          } else if (pickerResult && !pickerResult.ok) {
+                            result = { ok: false, error: pickerResult.name };
+                          } else {
+                            result = { ok: false, error: 'User cancelled folder selection.' };
+                          }
+                        } catch (e: any) {
+                          result = { ok: false, error: e.message || 'Failed to open folder picker' };
+                        }
+                      }
+                    } else if (callName === 'local_list_directory') {
+                      if (!rootDirRef.current) {
+                        result = { ok: false, error: 'No local folder connected. Ask the user to run local_connect_folder first.' };
+                      } else {
+                        try {
+                          const subPath = (call.args as any)?.path || '';
+                          let dirHandle = rootDirRef.current;
+                          if (subPath) {
+                            const parts = subPath.split('/').filter(Boolean);
+                            for (const part of parts) {
+                              dirHandle = await dirHandle.getDirectoryHandle(part);
+                            }
+                          }
+                          const entries: { name: string; type: string; size?: number }[] = [];
+                          for await (const [name, handle] of (dirHandle as any).entries()) {
+                            if (handle.kind === 'file') {
+                              const file = await (handle as FileSystemFileHandle).getFile();
+                              entries.push({ name, type: 'file', size: file.size });
+                            } else {
+                              entries.push({ name, type: 'directory' });
+                            }
+                          }
+                          result = { ok: true, path: subPath || '/', entries, total: entries.length, folderName: connectedFolderNameRef.current };
+                        } catch (e: any) {
+                          result = { ok: false, error: e.message || 'Failed to list directory' };
+                        }
+                      }
+                    } else if (callName === 'local_read_file') {
+                      if (!rootDirRef.current) {
+                        result = { ok: false, error: 'No local folder connected. Ask the user to run local_connect_folder first.' };
+                      } else if (!(call.args as any)?.path) {
+                        result = { ok: false, error: 'No file path provided.' };
+                      } else {
+                        try {
+                          const filePath = (call.args as any).path;
+                          const parts = filePath.split('/').filter(Boolean);
+                          const fileName = parts.pop()!;
+                          let dirHandle = rootDirRef.current;
+                          for (const part of parts) {
+                            dirHandle = await dirHandle.getDirectoryHandle(part);
+                          }
+                          const fileHandle = await dirHandle.getFileHandle(fileName);
+                          const file = await fileHandle.getFile();
+                          const text = await file.text();
+                          result = { ok: true, path: filePath, content: text, size: file.size, mimeType: file.type || 'text/plain', lastModified: new Date(file.lastModified).toISOString() };
+                        } catch (e: any) {
+                          result = { ok: false, error: e.message || 'Failed to read file' };
+                        }
+                      }
+                    } else if (callName === 'local_write_file') {
+                      if (!rootDirRef.current) {
+                        result = { ok: false, error: 'No local folder connected. Ask the user to run local_connect_folder first.' };
+                      } else if (!(call.args as any)?.path) {
+                        result = { ok: false, error: 'No file path provided.' };
+                      } else if ((call.args as any)?.content === undefined) {
+                        result = { ok: false, error: 'No file content provided.' };
+                      } else {
+                        try {
+                          const filePath = (call.args as any).path;
+                          const content = String((call.args as any).content);
+                          const parts = filePath.split('/').filter(Boolean);
+                          const fileName = parts.pop()!;
+                          let dirHandle = rootDirRef.current;
+                          for (const part of parts) {
+                            dirHandle = await dirHandle.getDirectoryHandle(part, { create: true });
+                          }
+                          const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+                          const writable = await fileHandle.createWritable();
+                          await writable.write(content);
+                          await writable.close();
+                          result = { ok: true, path: filePath, size: new Blob([content]).size, message: `File "${filePath}" written successfully.` };
+                        } catch (e: any) {
+                          result = { ok: false, error: e.message || 'Failed to write file' };
+                        }
+                      }
                     }
 
                     setTasks(prev =>
@@ -5688,6 +5898,26 @@ ${historyContext}
       <video ref={videoRef} className="hidden" autoPlay playsInline muted />
 
 
+
+      {awaitingFolderPicker && (
+        <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center">
+          <div className="bg-[#1a1b1f] border border-[#1f2025] rounded-2xl p-8 max-w-sm w-full mx-4 text-center">
+            <div className="text-4xl mb-4">📁</div>
+            <h3 className="text-lg font-bold text-white mb-2">Connect Local Folder</h3>
+            <p className="text-sm text-[#64748b] mb-6">Beatrice wants to access a folder on your computer. Click below to select a folder — she will be able to browse, read, and write files inside it.</p>
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => { setAwaitingFolderPicker(false); if (folderPickerResolverRef.current) { folderPickerResolverRef.current(null); folderPickerResolverRef.current = null; } }}
+                className="px-5 py-2.5 rounded-xl text-sm text-[#64748b] border border-[#1f2025] hover:bg-[#25262b] transition-colors"
+              >Cancel</button>
+              <button
+                onClick={handleFolderPickerClick}
+                className="px-5 py-2.5 rounded-xl text-sm font-bold text-black bg-[#d0a78b] hover:bg-[#c49a7d] transition-colors"
+              >Select Folder</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <AnimatePresence>
         {showDocumentViewer && activeDocument && (

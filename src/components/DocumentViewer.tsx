@@ -140,6 +140,19 @@ export function DocumentViewer({
           </AnimatePresence>
         </div>
 
+        {/* Open in new tab */}
+        {url && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--accent)] text-[var(--accent)] text-xs font-bold hover:bg-[var(--accent)] hover:text-[var(--accent-text)] transition-all"
+            title="Open in new tab"
+          >
+            Open App
+          </a>
+        )}
+
         {/* Ask Beatrice to refine */}
         {onRefine && (
           <button
