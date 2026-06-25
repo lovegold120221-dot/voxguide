@@ -366,34 +366,32 @@ registerProcessor('audio-capture-processor', AudioCaptureProcessor);
   stop() {
     this.killed = true;
     this.onData = () => {};
-    if (this.workletNode && this.audioContext) {
-      try {
-        this.workletNode.disconnect();
-      } catch (e) {}
-    }
-    if (this.silentSink) {
-      try {
-        this.silentSink.disconnect();
-      } catch (e) {}
-    }
-    if (this.analyser) {
-      try {
-        this.analyser.disconnect();
-      } catch (e) {}
-    }
+    // Kill the microphone FIRST — stops AudioWorklet from getting new data
     if (this.stream) {
       this.stream.getTracks().forEach(track => {
-        try {
-          track.stop();
-        } catch (e) {}
+        try { track.stop(); } catch (e) {}
       });
+    }
+    // Suspend AudioContext immediately — halts all audio processing
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      try {
+        this.audioContext.suspend().catch(() => {});
+      } catch (e) {}
+    }
+    // Now clean up the graph
+    if (this.workletNode && this.audioContext) {
+      try { this.workletNode.disconnect(); } catch (e) {}
+    }
+    if (this.silentSink) {
+      try { this.silentSink.disconnect(); } catch (e) {}
+    }
+    if (this.analyser) {
+      try { this.analyser.disconnect(); } catch (e) {}
     }
     if (this.audioContext && this.audioContext.state !== 'closed') {
       try {
         this.audioContext.close();
-      } catch (e) {
-        console.error("Failed to close AudioContext:", e);
-      }
+      } catch (e) {}
     }
     this.audioContext = null;
     this.stream = null;
