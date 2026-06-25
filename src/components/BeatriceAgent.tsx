@@ -5899,6 +5899,30 @@ ${historyContext}
 
       sessionRef.current = session;
 
+      // Wrap session sendRealtimeInput to guard against sending to closing WebSocket
+      const originalSendRI = (session as any).sendRealtimeInput;
+      if (typeof originalSendRI === 'function') {
+        (session as any).sendRealtimeInput = function(data: any) {
+          if (!sessionHealthyRef.current || !sessionRef.current) return;
+          try {
+            const result = originalSendRI.call(session, data);
+            if (result && typeof result.catch === 'function') result.catch(() => {});
+            return result;
+          } catch {}
+        };
+      }
+      const originalSend = (session as any).send;
+      if (typeof originalSend === 'function' && originalSend !== (session as any).sendRealtimeInput) {
+        (session as any).send = function(data: any) {
+          if (!sessionHealthyRef.current || !sessionRef.current) return;
+          try {
+            const result = originalSend.call(session, data);
+            if (result && typeof result.catch === 'function') result.catch(() => {});
+            return result;
+          } catch {}
+        };
+      }
+
       audioRecorderRef.current = new AudioRecorder((base64Data) => {
         if (!sessionHealthyRef.current || !sessionRef.current) return;
         sendAudioToLive(base64Data);
