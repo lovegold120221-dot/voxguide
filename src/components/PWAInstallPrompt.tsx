@@ -38,7 +38,7 @@ export function PWAInstallPrompt({ visible, onInstall, onDismiss }: Props) {
             </div>
 
             <p className="text-xs text-zinc-300 leading-relaxed font-medium">
-              Add Beatrice to your home screen for a seamless, full-screen native experience.
+              Install Beatrice for a native app experience — full-screen, offline-ready, and always just a tap away.
             </p>
 
             <button
