@@ -4349,7 +4349,11 @@ ${historyContext}
             }
           ],
           inputAudioTranscription: {},
-          outputAudioTranscription: {}
+          outputAudioTranscription: {},
+          contextWindowCompression: {
+            triggerTokens: 104857,
+            slidingWindow: { targetTokens: 52428 },
+          },
         },
         callbacks: {
           onopen: () => {
