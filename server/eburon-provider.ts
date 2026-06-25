@@ -6,7 +6,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 // ── Private model registry (server-only, never exposed to frontend) ──
 // Internal upstream model IDs — never expose these names to users, docs, or logs.
-const _m = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 50, 46, 53, 45, 102, 108, 97, 115, 104, 45, 110, 97, 116, 105, 118, 101, 45, 97, 117, 100, 105, 111, 45, 112, 114, 101, 118, 105, 101, 119, 45, 49, 50, 45, 50, 48, 50, 53);
+const _m = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 51, 46, 49, 45, 102, 108, 97, 115, 104, 45, 108, 105, 118, 101, 45, 112, 114, 101, 118, 105, 101, 119);
 const _m2 = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 50, 46, 53, 45, 102, 108, 97, 115, 104);
 const _mv = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 50, 46, 53, 45, 102, 108, 97, 115, 104, 45, 118, 105, 115, 105, 111, 110, 45, 108, 97, 116, 101, 115, 116);
 const _mw = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 50, 46, 48, 45, 102, 108, 97, 115, 104, 45, 101, 120, 112);
