@@ -1,6 +1,6 @@
 # Beatrice — AI Voice Agent by Eburon AI
 
-**Beatrice** is a real-time voice AI agent powered by the **Eburon Live API** with WhatsApp integration, multi-language support, persistent memory, unlimited document generation, Google Drive sync, sandbox sub-agent, Cerebras browser automation, and 10 specialized Belgian administrative tools. Built by [Eburon AI](https://eburon.ai).
+**Beatrice** is a real-time voice AI agent powered by the **Eburon Live API** with WhatsApp integration, multi-language support, persistent memory, unlimited document generation, Google Drive sync, local filesystem access, app building, and 10 specialized Belgian administrative tools. Built by [Eburon AI](https://eburon.ai).
 
 <p align="center">
   <a href="https://whatsapp.eburon.ai">
@@ -72,10 +72,9 @@ Data Layer
 - **Google Drive Sync** — All generated outputs (documents, websites, apps) automatically uploaded to a `Beatrice_Workspace` folder on Google Drive
 - **Proactive Memory** — Beatrice automatically saves user preferences, facts, deadlines, and personal info via `add_to_memory`. Memories persist across sessions and are pre-loaded at session start
 - **Adjustable Context** — Conversation history slider (0–100 messages) controls how much past context Beatrice uses
-- **Sandbox Sub-Agent** — Delegate complex tasks to a cascading AI pipeline (Eburon Sandbox → Multimodal Pro → Cerebras → Coder Pro → Worker)
+- **App Building** — Beatrice can build full apps, websites, 3D visualizations, games, and tools on demand. Generated apps are served live at a unique URL.
 - **Local Filesystem Access** — Beatrice can browse, read, and write files on the user's local computer via the browser File System Access API (`showDirectoryPicker`). Supports listing directories, reading text files, and writing/creating files in user-selected folders. Chrome/Edge only.
-- **OpenCode CLI Agent** — Full repository access via OpenCode CLI: read/write files, run commands, build apps, deploy via Dokploy. 21+ installed skills (Flutter, video production, browser automation, YouTube, TikTok, web scraping, machine access)
-- **Cerebras Browser Agent** — Automated web browsing via Browser-Use + Cerebras inference
+- **Browser Automation** — Automated web browsing, form filling, data extraction, and multi-step browser interactions.
 - **10 Belgian Admin Tools** — KBO/CBE lookup, VIES VAT validation, Peppol e-invoicing, tax calendar, registration tax calc, itsme navigator, language bridge (FR/NL/EN), social security navigator, labor law simplifier, mobility planner (NMBS/SNCB)
 - **Multi-Language** — 147 languages, Flemish (nl-BE) primary, voice-driven language switching
 - **Live Sandbox Log Viewer** — Progressive log scenarios (terminal, sandbox, browser, document, website) shown in DocumentViewer while tools run
@@ -100,19 +99,16 @@ Every output Beatrice produces is automatically saved:
 ## Quick Start
 
 ### One-Paste Install (Freshly Formatted Machine)
-Works on macOS, Debian, Ubuntu, and Windows. Installs Node.js 22, Python 3.11, Chromium, Git, all dependencies, and runs the app.
 
 **macOS / Debian / Ubuntu:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lovegold120221-dot/voice-zero/main/bootstrap.sh | bash
+git clone https://github.com/lovegold120221-dot/voice-zero.git
+cd voice-zero
+npm install
+cp .env.example .env
+# Add your API keys
+npm run dev:full
 ```
-
-**Windows (PowerShell as Administrator):**
-```powershell
-irm https://raw.githubusercontent.com/lovegold120221-dot/voice-zero/main/install.ps1 | iex
-```
-
-The app runs at `http://localhost:4200`.
 
 ### Prerequisites (Manual Install)
 - Node.js 22+
@@ -199,7 +195,7 @@ public/
 
 ## Skills Catalog
 
-Beatrice organizes her capabilities into 10 skill categories, each with natural trigger phrases:
+Beatrice organizes her capabilities into skill categories, each with natural trigger phrases:
 
 | Skill | Triggers |
 |---|---|
@@ -210,11 +206,10 @@ Beatrice organizes her capabilities into 10 skill categories, each with natural 
 | **Media Understanding** | "look at this image", "read this page", "transcribe" |
 | **WhatsApp Attachments** | file/image/document/voice note in WhatsApp |
 | **Deep Research** | "analyze", "research", "draft a report", "investigate" |
-| **App Building & Coding** | "build me an app", "create a website", "use OpenCode" |
+| **App Building** | "build me an app", "create a website", "make a tool" |
 | **Web Browsing** | "go to this website", "scrape", "fill form" |
 | **Document Creation** | "create a document", "draft a letter", "make a proposal" |
-
-OpenCode CLI agent has 21+ installed skills: ai-video-cinema, ai-video-generation, ai-video-production, browser-act, flutter-dev, himalaya, machine-access, macbook, mobile-pwa-design, google-search-serp, youtube-search, youtube-transcript, tiktok-contents, web-page-marker, open-search-code-lm, gmail-accounts, browser-act-skill-forge, dokploy-deploy, eburon-meeting-app, epi-knowledge, and appinsights-instrumentation.
+| **Local Filesystem** | "my files", "local folder", "read this file", "save to my computer" |
 
 ---
 
@@ -296,16 +291,6 @@ npm --prefix functions run build && firebase deploy --only functions
 | `BEATRICE_WORKSPACE_DIR` | ⬜ | App workspace path (default `/data/beatrice-workspace`) |
 
 See `.env.example` for a complete template.
-
----
-
-## CI / CD
-
-`.github/workflows/android-distribution.yml` — On push to `main`:
-1. Builds web app
-2. Deploys to Firebase Hosting
-3. Builds Android APK via Bubblewrap (Trusted Web Activity)
-4. Uploads to Firebase App Distribution
 
 ---
 
