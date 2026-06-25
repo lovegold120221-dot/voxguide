@@ -67,7 +67,7 @@ Data
 | Layer | Tech |
 |---|---|
 | Frontend | React 19, Vite 6, Tailwind v4, motion, lucide-react |
-| Backend | Express 4, tsx, Node 22+ |
+| Backend | Express 4, tsx, Node 22+, multer (file uploads) |
 | AI (server) | Eburon Live API via `server/eburon-provider.ts` |
 | AI (client realtime) | `@google/genai` **only** via `src/lib/voiceSession.ts` |
 | Auth | Firebase (Google OAuth) |
@@ -89,6 +89,9 @@ Data
 - **Theme**: Both `theme-dark` (default) and `theme-light`. Use CSS vars from `src/index.css` (`var(--bg-base)`, `var(--text-primary)`, `var(--accent)`, etc.). 70+ override rules in light mode.
 - **Mobile browser**: Includes an in-progress Flutter app at `flutter/`.
 - **Agent skill directory**: `.agents/types/` provides TypeScript helpers for defining Codebuff agents; `.agents/skills/` stores skill markdown files that the agents can read at session start.
+- **Filesystem tools**: `local_*` (browser `showDirectoryPicker`, Chrome/Edge only) + `server_*` (`POST /api/filesystem/*` against `WORKSPACE_DATA_DIR` via `safeResolve` path validation; `multer` multipart upload capped at 50 MB). Both expose `read|write|list` over text/image/audio; images/audio return a dataUrl. `local_analyze_file` is a one-step alternative to chaining `local_read_file` → `analyze_image`/`transcribe_audio`.
+- **OpenCode Zen swap chain** (`/api/terminal/open-skills` → `runOpenTerminalWithFallback`): tries each entry in `OPENCODE_ZEN_FREE_MODELS` (env-overridable comma-separated `opencode/<model>` ids; defaults include `zenn-ai-large-free`, `deepseek-v4-flash-free`, `big-pickle`, `north-mini-code-free`, `mimo-v2.5-free`, `nemotron-3-ultra-free`). A failure with a quota/rate-limit signature (`429`/`402`/`out[-_ ]?of[-_ ]?tokens`/`RESOURCE_EXHAUSTED`/etc. in stderr/stdout) swaps to the next free model; a real task error breaks out and the local Ollama fallback (`OPEN_TERMINAL_FALLBACK_MODEL`) takes over as last resort. Errors annotate which models were tried for diagnostics.
+- **Open Sites PWA skill** (`.opencode/skills/open-sites-pwa/SKILL.md` + `POST /api/open-site/clone`): mirrors a user-supplied PWA URL into `$BEATRICE_WORKSPACE_DIR/cloned-sites/<slug>/` with `wget --mirror --convert-links --adjust-extension --page-requisites --no-parent --directory-prefix=<target>`. Backend adds polite defaults (`--execute robots=off`, `--wait=0.5`, `--random-wait`, `--tries=3`, `--timeout=30`, `--connect-timeout=15`, `--max-redirect=5`, `--user-agent=Beatrice-OpenSitesPWA/1.0`); the slug is `[a-zA-Z0-9._-]{1,80}` derived from `hostname + path + query` (leading `www.` stripped). Returns `{ previewPath: /beatrice-workspace/cloned-sites/<slug>/, previewUrl: <BEATRICE_PUBLIC_URL>/..., size, fileCount, exitCode, partial, durationMs }`. Sister endpoints: `GET /api/open-site/list` (audit existing clones), `DELETE /api/open-site/:slug` (free disk). The existing DocumentViewer (`src/components/DocumentViewer.tsx`) renders the result by setting `iframe src={previewUrl}` — no UI changes required.
 
 ## Notable Gotchas
 
@@ -127,10 +130,11 @@ Data
 | `src/lib/webClient.ts` | Web glance / search helper client |
 | `src/lib/opfs.ts` | OPFS storage utilities |
 | `src/lib/db.ts` | IndexedDB low-level helpers |
+| `src/lib/localFolder.ts` | Browser File System Access API wrapper (`showDirectoryPicker`, list/read/write) |
 | `src/constants.ts` | Shared `LANGUAGES` array (147 entries) |
 | `src/version.ts` | `APP_VERSION`, `APP_BUILD` for PWA updates |
 | `vite.config.ts` | Reads env (incl. legacy fallback for upstream SDK key name), exposes via `process.env.*` `define:` |
-| `server/index.ts` | Express entry, all routes, static serving, SPA fallback |
+| `server/index.ts` | Express entry, all routes, static serving, SPA fallback (includes `POST /api/filesystem/{read,write,list,upload}` VPS filesystem CRUD) |
 | `server/eburon-provider.ts` | **Sole** AI call wrapper (5 models, live-session token, image gen) |
 | `server/whatsapp.ts` | Baileys `WhatsAppManager` (sessions, QR, SSE, media cache) |
 | `server/whatsapp-tools.ts` | `handleSendMessage`, `handleWhatsAppAction` (permission-gated) |

@@ -13,7 +13,9 @@ services:
       OLLAMA_BASE_URL: http://127.0.0.1:11434
       HOME: /home/node
       OPENCODE_PATH: /home/node/.opencode/bin/opencode
-      OPENCODE_MODEL: opencode/deepseek-v4-flash-free
+      OPENCODE_MODEL: opencode/zenn-ai-large-free
+      OPENCODE_FALLBACK_MODEL: opencode/deepseek-v4-flash-free
+      OPENCODE_ZEN_FREE_MODELS: opencode/zenn-ai-large-free,opencode/deepseek-v4-flash-free,opencode/big-pickle,opencode/north-mini-code-free,opencode/mimo-v2.5-free,opencode/nemotron-3-ultra-free
       OPEN_TERMINAL_FALLBACK_MODEL: media-pipe/eburon-sandbox-worker:latest
       OPEN_TERMINAL_WORKDIR: /app
       BEATRICE_WORKSPACE_DIR: /data/beatrice-workspace

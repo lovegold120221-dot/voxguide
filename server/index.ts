@@ -898,10 +898,58 @@ import { execSync, spawn } from 'child_process';
 import crypto from 'crypto';
 
 const OPENCODE_PATH = process.env.OPENCODE_PATH || '/root/.opencode/bin/opencode';
-const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/deepseek-v4-flash-free';
+// OpenCode (Zen free-tier) model swap chain. When the primary runs out of tokens,
+// automatically swap to the next free model. Order matters: degrade gracefully so
+// output quality falls back only when forced. Override the full list via
+// OPENCODE_ZEN_FREE_MODELS (comma-separated opencode/<model> ids).
+const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/zenn-ai-large-free';
+const OPENCODE_FALLBACK_MODEL = process.env.OPENCODE_FALLBACK_MODEL || 'opencode/deepseek-v4-flash-free';
+const OPENCODE_ZEN_FREE_MODELS = (process.env.OPENCODE_ZEN_FREE_MODELS
+  || [
+      OPENCODE_MODEL,
+      OPENCODE_FALLBACK_MODEL,
+      'opencode/big-pickle',
+      'opencode/north-mini-code-free',
+      'opencode/mimo-v2.5-free',
+      'opencode/nemotron-3-ultra-free',
+    ].join(',')
+).split(',').map(s => s.trim()).filter(Boolean);
+// Guaranteed-non-empty chain used by the fallback loop so we never pass `null`
+// to runOpenTerminalOllamaFallback as the `primary` argument.
+const OPENCODE_ZEN_CHAIN = OPENCODE_ZEN_FREE_MODELS.length > 0 ? OPENCODE_ZEN_FREE_MODELS : [OPENCODE_MODEL];
 const OPEN_TERMINAL_FALLBACK_MODEL = process.env.OPEN_TERMINAL_FALLBACK_MODEL || 'media-pipe/eburon-sandbox-worker:latest';
 const OPEN_TERMINAL_WORKDIR = path.resolve(process.env.OPEN_TERMINAL_WORKDIR || path.join(__dirname, '..'));
 const OPEN_TERMINAL_MAX_OUTPUT = 24_000;
+
+// Patterns that indicate OpenCode CLI failed because of upstream quota/rate
+// limits (not real task errors). RunOpenTerminalWithFallback looks for these in
+// stderr/stdout to decide whether to swap to the next free model.
+const OPENCODE_QUOTA_PATTERNS: RegExp[] = [
+  /\b429\b/,
+  /\b402\b/,
+  /rate[-_ ]?limit/i,
+  /quota/i,
+  /usage[-_ ]?limit/i,
+  /usage[-_ ]?exceeded/i,
+  /out[-_ ]?of[-_ ]?tokens/i,
+  /insufficient[-_ ]?(?:quota|balance|credit)/i,
+  /resource[-_ ]?exhaust/i,
+  /too many requests/i,
+  /has been exhausted/i,
+  /RESOURCE_EXHAUSTED/,
+];
+
+function isOpenCodeQuotaError(stderr: string, stdout: string): boolean {
+  const combined = `${stderr || ''}\n${stdout || ''}`;
+  return OPENCODE_QUOTA_PATTERNS.some(p => p.test(combined));
+}
+
+// Slice the user's timeout across the remaining Zen models so a quota-storm
+// doesn't blow up to 5x the user's apparent patience. Floor at 15s per model
+// so prompt-loading can complete.
+function sliceTimeoutPerModel(userTimeout: number, modelsRemaining: number): number {
+  return Math.max(15, Math.floor(userTimeout / Math.max(1, modelsRemaining)));
+}
 
 const BEATRICE_WORKSPACE_DIR = process.env.BEATRICE_WORKSPACE_DIR || '/data/beatrice-workspace';
 const BEATRICE_PUBLIC_URL = process.env.BEATRICE_PUBLIC_URL || 'https://whatsapp.eburon.ai';
@@ -1007,13 +1055,15 @@ async function runOpenCodeTerminalTask(params: {
   appName?: string;
   workspacePath?: string;
   appUrl?: string;
+  modelOverride?: string;
 }): Promise<OpenTerminalResult> {
   const prompt = buildOpenTerminalPrompt(params);
   if (!prompt) throw new Error('task is required');
   if (!fs.existsSync(OPENCODE_PATH)) throw new Error(`OpenCode CLI not found at ${OPENCODE_PATH}`);
   if (!fs.existsSync(OPEN_TERMINAL_WORKDIR)) throw new Error(`Open terminal workdir not found: ${OPEN_TERMINAL_WORKDIR}`);
 
-  const args = ['run', '--model', OPENCODE_MODEL, '--dir', OPEN_TERMINAL_WORKDIR, '--dangerously-skip-permissions', prompt];
+  const model = params.modelOverride || OPENCODE_MODEL;
+  const args = ['run', '--model', model, '--dir', OPEN_TERMINAL_WORKDIR, '--dangerously-skip-permissions', prompt];
   const child = spawn(OPENCODE_PATH, args, {
     cwd: OPEN_TERMINAL_WORKDIR,
     env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
@@ -1084,8 +1134,7 @@ async function runOpenTerminalOllamaFallback(params: {
       systemPrompt,
       prompt,
       Math.min(params.timeout, 180),
-      1024,
-      false,
+      1024
     );
     const content = fallback.content.trim();
     if (!content) throw new Error('Local Eburon sandbox returned an empty response');
@@ -1115,9 +1164,46 @@ async function runOpenTerminalWithFallback(params: {
   workspacePath?: string;
   appUrl?: string;
 }): Promise<OpenTerminalResult> {
-  const primary = await runOpenCodeTerminalTask(params);
-  if (primary.ok) return primary;
-  return runOpenTerminalOllamaFallback(params, primary);
+  // 1. Try each OpenCode Zen free model in order. On quota errors, swap to the
+  //    next free model. On a non-quota failure (real task error), break out so
+  //    we don't waste time retrying the same kind of failure on a different model.
+  let lastZenResult: OpenTerminalResult | null = null;
+  const triedModels: string[] = [];
+  const chain = OPENCODE_ZEN_CHAIN;
+  for (let i = 0; i < chain.length; i++) {
+    const model = chain[i];
+    triedModels.push(model);
+    // Slice the total user timeout across remaining models so worst-case budget
+    // is `userTimeout` not `userTimeout × chain.length`.
+    const perModelTimeout = sliceTimeoutPerModel(params.timeout, chain.length - i);
+    const result = await runOpenCodeTerminalTask({ ...params, timeout: perModelTimeout, modelOverride: model });
+    if (result.ok) return result;
+    lastZenResult = result;
+    if (!isOpenCodeQuotaError(result.stderr || '', result.stdout || '')) break;
+    console.warn(`[OpenCode Zen] ${model} out of tokens. Swapping to next free model...`);
+  }
+
+  // 2. All Zen free models exhausted (or non-quota error). Last resort:
+  //    local Ollama fallback model. Synthesize a `primary` when none was tried
+  //    so the error message reflects reality (“…no Zen model was attempted…”).
+  const primary: OpenTerminalResult = lastZenResult ?? {
+    ok: false,
+    stdout: '',
+    stderr: '',
+    exitCode: null,
+    timedOut: false,
+    truncated: false,
+    error: 'No OpenCode Zen model was attempted (empty chain).',
+  };
+  const fallback = await runOpenTerminalOllamaFallback(params, primary);
+  if (fallback.ok) return fallback;
+
+  // 3. Everything failed — surface which models we tried for diagnostics.
+  return {
+    ...fallback,
+    error: (fallback.error || 'All OpenCode Zen free models exhausted') +
+      (triedModels.length > 0 ? ` (tried: ${triedModels.join(', ')})` : ''),
+  };
 }
 
 async function enqueueOpenCodeTerminalTask(params: {
@@ -2050,6 +2136,528 @@ app.delete('/api/workspace/delete/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Delete failed' });
+  }
+});
+
+// ── Server-side filesystem access (VPS files) ──
+
+const FILESYSTEM_ROOT = path.resolve(process.env.WORKSPACE_DATA_DIR || '/data/workspace');
+
+function safeResolve(userPath: string): string | null {
+  const resolved = path.resolve(FILESYSTEM_ROOT, userPath);
+  if (!resolved.startsWith(FILESYSTEM_ROOT)) return null;
+  return resolved;
+}
+
+app.post('/api/filesystem/read', async (req, res) => {
+  try {
+    const { path: filePath } = req.body;
+    if (!filePath) { res.status(400).json({ error: 'path required' }); return; }
+    const resolved = safeResolve(filePath);
+    if (!resolved) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) { res.status(404).json({ error: 'File not found' }); return; }
+    const stat = fs.statSync(resolved);
+    const ext = path.extname(resolved).toLowerCase();
+    const textExts = ['.txt','.md','.json','.js','.ts','.jsx','.tsx','.py','.rb','.go','.rs','.css','.html','.xml','.yaml','.yml','.toml','.ini','.cfg','.log','.csv','.svg'];
+    const imageExts = ['.jpg','.jpeg','.png','.gif','.webp','.bmp','.ico'];
+    const audioExts = ['.mp3','.wav','.ogg','.m4a','.mp4','.flac','.aac','.wma'];
+    if (textExts.includes(ext)) {
+      const content = fs.readFileSync(resolved, 'utf-8');
+      res.json({ ok: true, path: filePath, content, size: stat.size, mimeType: 'text/plain', fileType: 'text', lastModified: stat.mtime.toISOString() });
+    } else if (imageExts.includes(ext)) {
+      const buf = fs.readFileSync(resolved);
+      const base64 = buf.toString('base64');
+      const mime = {'.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.gif':'image/gif','.webp':'image/webp','.bmp':'image/bmp','.ico':'image/x-icon'}[ext] || 'image/png';
+      res.json({ ok: true, path: filePath, dataUrl: `data:${mime};base64,${base64}`, size: stat.size, mimeType: mime, fileType: 'image', lastModified: stat.mtime.toISOString() });
+    } else if (audioExts.includes(ext)) {
+      const buf = fs.readFileSync(resolved);
+      const base64 = buf.toString('base64');
+      const mime = {'.mp3':'audio/mpeg','.wav':'audio/wav','.ogg':'audio/ogg','.m4a':'audio/mp4','.mp4':'audio/mp4','.flac':'audio/flac','.aac':'audio/aac','.wma':'audio/x-ms-wma'}[ext] || 'audio/octet-stream';
+      res.json({ ok: true, path: filePath, dataUrl: `data:${mime};base64,${base64}`, size: stat.size, mimeType: mime, fileType: 'audio', lastModified: stat.mtime.toISOString() });
+    } else {
+      res.json({ ok: true, path: filePath, size: stat.size, mimeType: 'application/octet-stream', fileType: 'binary', lastModified: stat.mtime.toISOString() });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Read failed' });
+  }
+});
+
+app.post('/api/filesystem/write', async (req, res) => {
+  try {
+    const { path: filePath, content } = req.body;
+    if (!filePath || content === undefined) { res.status(400).json({ error: 'path and content required' }); return; }
+    const resolved = safeResolve(filePath);
+    if (!resolved) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!fs.existsSync(FILESYSTEM_ROOT)) fs.mkdirSync(FILESYSTEM_ROOT, { recursive: true });
+    const dir = path.dirname(resolved);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(resolved, content, 'utf-8');
+    const stat = fs.statSync(resolved);
+    res.json({ ok: true, path: filePath, size: stat.size });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Write failed' });
+  }
+});
+
+app.post('/api/filesystem/list', async (req, res) => {
+  try {
+    const { path: dirPath } = req.body;
+    const resolved = safeResolve(dirPath || '');
+    if (!resolved) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) { res.status(404).json({ error: 'Directory not found' }); return; }
+    const entries = fs.readdirSync(resolved, { withFileTypes: true });
+    const items = entries.map(e => ({
+      name: e.name,
+      type: e.isDirectory() ? 'directory' : 'file',
+      size: e.isFile() ? fs.statSync(path.join(resolved, e.name)).size : null,
+    }));
+    res.json({ ok: true, path: dirPath || '', items });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'List failed' });
+  }
+});
+
+import multer from 'multer';
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
+app.post('/api/filesystem/upload', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) { res.status(400).json({ error: 'No file uploaded. Use multipart/form-data with field name "file".' }); return; }
+    const destDir = req.body.path || '';
+    const resolved = safeResolve(path.join(destDir, file.originalname));
+    if (!resolved) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!fs.existsSync(FILESYSTEM_ROOT)) fs.mkdirSync(FILESYSTEM_ROOT, { recursive: true });
+    const dir = path.dirname(resolved);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(resolved, file.buffer);
+    res.json({ ok: true, path: path.join(destDir, file.originalname).replace(/\\/g, '/'), size: file.size, mimeType: file.mimetype });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Upload failed' });
+  }
+});
+
+// ── Server terminal command execution ──
+app.post('/api/server/terminal/run', async (req, res) => {
+  const { command, timeout = 60, cwd = '' } = req.body;
+  const timeLimit = timeout;
+  try {
+    
+    if (!command || typeof command !== 'string') {
+      return res.status(400).json({ ok: false, error: 'Command is required' });
+    }
+    
+    // Resolve safe workspace - create directory if it doesn't exist
+    const workspacePath = path.resolve(FILESYSTEM_ROOT, cwd || '');
+    if (!workspacePath.startsWith(FILESYSTEM_ROOT)) {
+      return res.status(403).json({ ok: false, error: 'Access denied: invalid workspace directory' });
+    }
+    
+    // Ensure workspace directory exists
+    if (!fs.existsSync(workspacePath)) {
+      fs.mkdirSync(workspacePath, { recursive: true });
+    }
+    
+    // Execute terminal command
+    const { exec } = await import('child_process');
+    const { stdout, stderr } = await exec(command, {
+      cwd: workspacePath,
+      timeout: timeout * 1000,
+      maxBuffer: 50 * 1024 * 1024,
+      encoding: 'utf8'
+    });
+    
+    return res.json({
+      ok: true,
+      command,
+      cwd: cwd || '',
+      stdout: (stdout as any).trim?.() ?? String(stdout),
+      stderr: (stderr as any).trim?.() ?? String(stderr),
+      exitCode: 0,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+      return res.status(500).json({
+        ok: false,
+        error: err.message?.includes?.('timed out')
+          ? `Command timed out after ${timeLimit}s`
+          : err.message,
+        command: req.body.command,
+        exitCode: err.code ?? 1,
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+
+// ── PWA Site Cloning ──
+app.post('/api/server/terminal/clone-site', async (req, res) => {
+  const { url, appName, timeout = 300 } = req.body;
+  const cloneTimeLimit = timeout;
+  try {
+    
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({ ok: false, error: 'URL is required' });
+    }
+    
+    // Validate URL
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      return res.status(400).json({ ok: false, error: 'Invalid URL format' });
+    }
+    
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      return res.status(400).json({ ok: false, error: 'URL must use http or https protocol' });
+    }
+    
+    // Generate safe directory name from appName or URL hostname
+    const safeName = appName && typeof appName === 'string' && appName.trim()
+      ? appName.trim().replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60)
+      : parsedUrl.hostname.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
+    
+    const cloneDir = path.join(FILESYSTEM_ROOT, 'cloned-sites', safeName + '_' + Date.now());
+    const relativeDir = path.relative(FILESYSTEM_ROOT, cloneDir);
+    
+    // Ensure workspace directory exists
+    if (!fs.existsSync(FILESYSTEM_ROOT)) {
+      fs.mkdirSync(FILESYSTEM_ROOT, { recursive: true });
+    }
+    if (!fs.existsSync(path.dirname(cloneDir))) {
+      fs.mkdirSync(path.dirname(cloneDir), { recursive: true });
+    }
+    
+    // Build wget command with mirror flags
+    const wgetCmd = `wget --mirror --convert-links --adjust-extension --page-requisites --no-parent --directory-prefix="${cloneDir}" "${url}"`;
+    
+    const { exec } = await import('child_process');
+    const { stdout, stderr } = await exec(wgetCmd, {
+      cwd: FILESYSTEM_ROOT,
+      timeout: timeout * 1000,
+      maxBuffer: 100 * 1024 * 1024,
+      encoding: 'utf8'
+    });
+    
+    // Build the live preview URL
+    // The cloned site will be at /beatrice-workspace/{userId}/{relativeDir}/
+    // We need a userId - for now use a placeholder that will be replaced by client
+    const previewPath = `/beatrice-workspace/__USER_ID__/${relativeDir}/`;
+    const previewUrl = `${BEATRICE_PUBLIC_URL}${previewPath}`;
+    
+    return res.json({
+      ok: true,
+      url,
+      clonedDir: relativeDir,
+      previewUrl,
+      previewPath,
+      stdout: (stdout as any).trim?.() ?? String(stdout),
+      stderr: (stderr as any).trim?.() ?? String(stderr),
+      exitCode: 0,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      ok: false,
+      error: err.message?.includes?.('timed out')
+        ? `Clone timed out after ${cloneTimeLimit}s`
+        : err.message,
+      exitCode: err.code ?? 1,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// ── Open Sites PWA — wget-based PWA cloning + live preview ──
+// Mirrors a user-supplied PWA URL into BEATRICE_WORKSPACE_DIR/cloned-sites/<slug>/
+// using wget (--mirror --convert-links --adjust-extension --page-requisites --no-parent)
+// then surfaces the result at /beatrice-workspace/cloned-sites/<slug>/ for the
+// DocumentViewer iframe. Skill markdown lives at
+// `.opencode/skills/open-sites-pwa/SKILL.md`; this endpoint is the canonical backend
+// implementation that the skill references.
+
+const CLONED_SITES_DIR = path.join(BEATRICE_WORKSPACE_DIR, 'cloned-sites');
+ensureBeatricedDir(CLONED_SITES_DIR);
+
+function deriveOpenSiteSlug(sourceUrl: string): { slug: string; normalized: string } | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(sourceUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+
+  const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+  if (!host || !/^[a-z0-9.-]+$/.test(host)) return null;
+
+  const pathSeg = parsed.pathname.replace(/^\/+/, '').replace(/\/+$/, '');
+  const querySeg = parsed.search ? parsed.search.slice(1) : '';
+
+  const raw = [host, pathSeg, querySeg].filter(Boolean).join('-');
+  const safe = raw
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+
+  const slug = safe || `site-${Date.now().toString(36)}`;
+  const normalized = `${parsed.protocol}//${host}${parsed.pathname}${parsed.search}`;
+  return { slug, normalized };
+}
+
+function buildOpenSitePreviewUrl(slug: string): { path: string; absolute: string } {
+  const safeSlug = sanitizePathSegment(slug);
+  const previewPath = `/beatrice-workspace/cloned-sites/${safeSlug}/`;
+  const absolute = `${BEATRICE_PUBLIC_URL.replace(/\/+$/, '')}${previewPath}`;
+  return { path: previewPath, absolute };
+}
+
+async function runWgetClone(params: {
+  sourceUrl: string;
+  targetDir: string;
+  timeoutSec: number;
+}): Promise<{ exitCode: number; timedOut: boolean; stdoutTail: string; stderrTail: string }> {
+  const { sourceUrl, targetDir, timeoutSec } = params;
+
+  // The user's mandated wget flags are mandatory; we add polite + safe defaults.
+  const args = [
+    '--mirror',
+    '--convert-links',
+    '--adjust-extension',
+    '--page-requisites',
+    '--no-parent',
+    '--execute', 'robots=off',
+    '--wait=0.5',
+    '--random-wait',
+    '--tries=3',
+    '--timeout=30',
+    '--connect-timeout=15',
+    '--max-redirect=5',
+    '--user-agent=Beatrice-OpenSitesPWA/1.0',
+    `--directory-prefix=${targetDir}`,
+    sourceUrl,
+  ];
+
+  return await new Promise((resolve) => {
+    const child = spawn('wget', args, { shell: false });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); }, 2000).unref();
+    }, Math.max(5, timeoutSec) * 1000);
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      const next = chunk.toString('utf8');
+      stdout = (stdout + next).slice(-4000);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      const next = chunk.toString('utf8');
+      stderr = (stderr + next).slice(-4000);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ exitCode: -1, timedOut: false, stdoutTail: '', stderrTail: `spawn error: ${err.message}` });
+    });
+    child.on('close', (exitCode) => {
+      clearTimeout(timer);
+      resolve({
+        exitCode: exitCode ?? -1,
+        timedOut,
+        stdoutTail: stdout.slice(-2000),
+        stderrTail: stderr.slice(-2000),
+      });
+    });
+  });
+}
+
+function dirSizeBytes(dir: string): number {
+  let total = 0;
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      try {
+        const stat = fs.statSync(full);
+        if (stat.isDirectory()) total += dirSizeBytes(full);
+        else if (stat.isFile()) total += stat.size;
+      } catch { /* ignore unreadable entries */ }
+    }
+  } catch { /* ignore unreadable dirs */ }
+  return total;
+}
+
+function fmtBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+const OPEN_SITES_MAX_TIMEOUT = 180;
+
+app.post('/api/open-site/clone', async (req, res) => {
+  try {
+    const sourceUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    if (!sourceUrl) { res.status(400).json({ ok: false, error: 'url is required' }); return; }
+
+    const derived = deriveOpenSiteSlug(sourceUrl);
+    if (!derived) {
+      res.status(400).json({ ok: false, error: 'url must be a valid http(s) URL' });
+      return;
+    }
+    const { slug, normalized } = derived;
+    const safeSlug = sanitizePathSegment(slug);
+    const targetDir = path.join(CLONED_SITES_DIR, safeSlug);
+    if (!targetDir.startsWith(CLONED_SITES_DIR + path.sep) && targetDir !== CLONED_SITES_DIR) {
+      res.status(400).json({ ok: false, error: 'slug escapes cloned-sites root' });
+      return;
+    }
+
+    const preview = buildOpenSitePreviewUrl(safeSlug);
+    const timeoutSec = Math.min(
+      Math.max(Number(req.body?.timeoutSec) || 120, 10),
+      OPEN_SITES_MAX_TIMEOUT,
+    );
+
+    ensureBeatricedDir(targetDir);
+    try {
+      // Refresh-style clone: wipe previous artifacts but keep the dir itself.
+      for (const entry of fs.readdirSync(targetDir)) {
+        try { fs.rmSync(path.join(targetDir, entry), { recursive: true, force: true }); } catch { /* ignore */ }
+      }
+    } catch { /* readdir failure handled below by mkdir */ }
+
+    const startedAt = Date.now();
+    const result = await runWgetClone({ sourceUrl: normalized, targetDir, timeoutSec });
+    const durationMs = Date.now() - startedAt;
+
+    const indexPath = path.join(targetDir, 'index.html');
+    const hasIndex = fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
+    // Treat any exit that produced an index.html as usable; wget exits 8 on 404s but
+    // partial mirrors with index still render.
+    const partial = !hasIndex
+      ? false
+      : result.exitCode !== 0 && !result.timedOut;
+
+    if (!hasIndex) {
+      res.status(502).json({
+        ok: false,
+        slug: safeSlug,
+        sourceUrl: normalized,
+        previewPath: preview.path,
+        previewUrl: preview.absolute,
+        error: result.timedOut
+          ? `wget timed out after ${timeoutSec}s`
+          : `wget did not produce index.html (exit ${result.exitCode})`,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        stderrTail: result.stderrTail,
+        durationMs,
+      });
+      return;
+    }
+
+    const sizeBytes = dirSizeBytes(targetDir);
+    const fileCount = (function walk(dir: string): number {
+      let n = 0;
+      try {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) n += walk(full);
+          else n += 1;
+        }
+      } catch { /* ignore */ }
+      return n;
+    })(targetDir);
+
+    res.json({
+      ok: true,
+      slug: safeSlug,
+      sourceUrl: normalized,
+      previewPath: preview.path,
+      previewUrl: preview.absolute,
+      indexPath: `/beatrice-workspace/cloned-sites/${safeSlug}/index.html`,
+      size: fmtBytes(sizeBytes),
+      sizeBytes,
+      fileCount,
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+      partial,
+      durationMs,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message || 'open-site clone failed' });
+  }
+});
+
+app.get('/api/open-site/list', async (_req, res) => {
+  try {
+    if (!fs.existsSync(CLONED_SITES_DIR)) { res.json({ ok: true, items: [] }); return; }
+    const items = fs.readdirSync(CLONED_SITES_DIR, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => {
+        const full = path.join(CLONED_SITES_DIR, e.name);
+        const sizeBytes = dirSizeBytes(full);
+        const preview = buildOpenSitePreviewUrl(e.name);
+        let fileCount = 0;
+        try {
+          const stack = [full];
+          while (stack.length > 0) {
+            const cur = stack.pop()!;
+            for (const entry of fs.readdirSync(cur, { withFileTypes: true })) {
+              const child = path.join(cur, entry.name);
+              if (entry.isDirectory()) stack.push(child);
+              else fileCount += 1;
+            }
+          }
+        } catch { /* ignore */ }
+        let lastModified: string | null = null;
+        try {
+          lastModified = fs.statSync(full).mtime.toISOString();
+        } catch { /* ignore */ }
+        const hasIndex = fs.existsSync(path.join(full, 'index.html'));
+        return {
+          slug: e.name,
+          previewPath: preview.path,
+          previewUrl: preview.absolute,
+          size: fmtBytes(sizeBytes),
+          sizeBytes,
+          fileCount,
+          hasIndex,
+          lastModified,
+        };
+      })
+      .sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || ''));
+    res.json({ ok: true, items, root: CLONED_SITES_DIR });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message || 'open-site list failed' });
+  }
+});
+
+app.delete('/api/open-site/:slug', async (req, res) => {
+  try {
+    const raw = String(req.params.slug || '').trim();
+    if (!raw) { res.status(400).json({ ok: false, error: 'slug required' }); return; }
+    const safeSlug = sanitizePathSegment(raw);
+    const target = path.join(CLONED_SITES_DIR, safeSlug);
+    if (!target.startsWith(CLONED_SITES_DIR + path.sep)) {
+      res.status(400).json({ ok: false, error: 'slug escapes cloned-sites root' });
+      return;
+    }
+    if (!fs.existsSync(target)) {
+      res.status(404).json({ ok: false, error: 'site not found', slug: safeSlug });
+      return;
+    }
+    fs.rmSync(target, { recursive: true, force: true });
+    res.json({ ok: true, slug: safeSlug, deleted: true });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message || 'open-site delete failed' });
   }
 });
 

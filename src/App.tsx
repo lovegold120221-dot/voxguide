@@ -22,6 +22,7 @@ import { usePWA } from './hooks/usePWA';
 import { APP_VERSION } from './version';
 import { LocalFolderProvider } from './lib/localFolderContext';
 import { FolderWatcher } from './components/FolderWatcher';
+import { BEATRICE_ONBOARDING_VERSION, getLocalFolderState } from './lib/db';
 
 /* ── Theme system ── */
 type Theme = 'dark' | 'light';
@@ -196,11 +197,22 @@ export default function App() {
   }, [storeToken]);
 
   const [onboardingDone, setOnboardingDone] = useState(() => {
-    try { return localStorage.getItem('beatrice_onboarding_done') === 'true'; } catch { return false; }
+    try {
+      const storedVersion = localStorage.getItem('beatrice_onboarding_version');
+      const wasDone = localStorage.getItem('beatrice_onboarding_done') === 'true';
+      // Force re-onboarding if version changed (clears old cache)
+      if (storedVersion !== String(BEATRICE_ONBOARDING_VERSION)) {
+        localStorage.removeItem('beatrice_onboarding_done');
+      }
+      return wasDone && storedVersion === String(BEATRICE_ONBOARDING_VERSION);
+    } catch { return false; }
   });
 
   const handleOnboardingComplete = useCallback(() => {
-    try { localStorage.setItem('beatrice_onboarding_done', 'true'); } catch {}
+    try {
+      localStorage.setItem('beatrice_onboarding_done', 'true');
+      localStorage.setItem('beatrice_onboarding_version', String(BEATRICE_ONBOARDING_VERSION));
+    } catch {}
     setOnboardingDone(true);
   }, []);
 

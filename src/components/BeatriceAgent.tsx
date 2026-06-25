@@ -1136,6 +1136,73 @@ export function BeatriceAgent({
   const [awaitingFolderPicker, setAwaitingFolderPicker] = useState(false);
   const folderPickerResolverRef = useRef<((value: { ok: boolean; name: string } | null) => void) | null>(null);
 
+  // ── Local daemon connection ──
+  const daemonPortRef = useRef<number>(55420);
+  const daemonConnectedRef = useRef<boolean>(false);
+  const [daemonStatus, setDaemonStatus] = useState<'unknown' | 'online' | 'offline'>('unknown');
+  const [awaitingDaemon, setAwaitingDaemon] = useState(false);
+  const [daemonLoading, setDaemonLoading] = useState(false);
+  const daemonResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
+
+  const checkLocalDaemon = useCallback(async () => {
+    try {
+      const resp = await fetch(`http://127.0.0.1:${daemonPortRef.current}/health`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      const data = await resp.json();
+      daemonConnectedRef.current = data.ok === true;
+      setDaemonStatus(data.ok ? 'online' : 'offline');
+      return data;
+    } catch {
+      daemonConnectedRef.current = false;
+      setDaemonStatus('offline');
+      return null;
+    }
+  }, []);
+
+  const handleDaemonStartClick = async () => {
+    const isMac = navigator.platform?.toLowerCase().includes('mac') ?? false;
+    const isWin = navigator.platform?.toLowerCase().includes('win') ?? false;
+    const ext = isMac ? '.command' : isWin ? '.bat' : '.sh';
+    const filename = `beatrice-daemon${ext}`;
+
+    const script = isMac
+      ? `#!/bin/bash\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\nnode ~/Downloads/beatrice-local-daemon.mjs\n`
+      : isWin
+        ? `@echo off\ncd /d %USERPROFILE%\\Downloads\nif not exist beatrice-local-daemon.mjs (\n  curl -sS -o beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\n)\nnode beatrice-local-daemon.mjs\npause\n`
+        : `#!/usr/bin/env bash\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
+
+    const blob = new Blob([script], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    // Poll with loading state, keep modal open
+    setDaemonLoading(true);
+    const connected = await pollForDaemon(30, 2000);
+    setDaemonLoading(false);
+
+    if (daemonResolverRef.current) {
+      daemonResolverRef.current(connected);
+      daemonResolverRef.current = null;
+    }
+    setAwaitingDaemon(false);
+  };
+
+  const pollForDaemon = useCallback(async (maxRetries = 20, delayMs = 2000): Promise<boolean> => {
+    for (let i = 0; i < maxRetries; i++) {
+      await new Promise(r => setTimeout(r, delayMs));
+      const health = await checkLocalDaemon();
+      if (health) return true;
+    }
+    return false;
+  }, [checkLocalDaemon]);
+
   // Track previous settings values for real-time session updates
   const prevPersonaRef = useRef(personaName);
   const prevTitleRef = useRef(userTitle);
@@ -1823,9 +1890,52 @@ export function BeatriceAgent({
     } else if (toolName === 'local_list_directory' && result?.error) {
       finalHtml = `<h1>📂 List Directory</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>${result.error}</p></div>`;
     } else if (toolName === 'local_read_file' && result?.ok) {
-      const escapedContent = result.content.replace(/[&<>"']/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c] || c));
-      const fileInfo = `${result.path} (${(result.size / 1024).toFixed(1)} KB)`;
-      finalHtml = `<h1>📄 ${result.path}</h1><p style="font-size:11px; color:#64748b; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px;">${fileInfo} • ${result.mimeType}</p><div style="background:#1a1b1f; border:1px solid #1f2025; padding:20px; border-radius:18px; font-family:monospace; font-size:12px; color:#d0a78b; white-space:pre-wrap; overflow-x:auto; max-height:500px; overflow-y:auto;"><pre style="margin:0; font-family:inherit; white-space:pre-wrap; word-break:break-word;">${escapedContent}</pre></div>`;
+      if (result.fileType === 'image' && result.dataUrl) {
+        finalHtml = '<h1>🖼️ ' + result.path + '</h1><p style="font-size:11px; color:#64748b; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px;">' + result.path + ' (' + (result.size / 1024).toFixed(1) + ' KB) • ' + result.mimeType + '</p><div style="text-align:center; background:#1a1b1f; border:1px solid #1f2025; border-radius:18px; padding:20px; overflow:hidden;"><img src="' + result.dataUrl + '" alt="' + result.path + '" style="max-width:100%; max-height:500px; border-radius:12px; object-fit:contain;" /></div>';
+      } else if (result.fileType === 'audio' && result.dataUrl) {
+        finalHtml = '<h1>🎵 ' + result.path + '</h1><p style="font-size:11px; color:#64748b; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px;">' + result.path + ' (' + (result.size / 1024).toFixed(1) + ' KB) • ' + result.mimeType + '</p><div style="text-align:center; background:#1a1b1f; border:1px solid #1f2025; border-radius:18px; padding:20px;"><audio controls style="width:100%;"><source src="' + result.dataUrl + '" type="' + result.mimeType + '">Your browser does not support audio playback.</audio></div>';
+      } else {
+        const escapedContent = result.content.replace(/[&<>"']/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c] || c));
+        const fileInfo = result.path + ' (' + (result.size / 1024).toFixed(1) + ' KB)';
+        finalHtml = '<h1>📄 ' + result.path + '</h1><p style="font-size:11px; color:#64748b; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px;">' + fileInfo + ' • ' + result.mimeType + '</p><div style="background:#1a1b1f; border:1px solid #1f2025; padding:20px; border-radius:18px; font-family:monospace; font-size:12px; color:#d0a78b; white-space:pre-wrap; overflow-x:auto; max-height:500px; overflow-y:auto;"><pre style="margin:0; font-family:inherit; white-space:pre-wrap; word-break:break-word;">' + escapedContent + '</pre></div>';
+      }
+    } else if (toolName === 'local_read_file' && result?.error) {
+      finalHtml = '<h1>📄 Read File</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>' + result.error + '</p></div>';
+    } else if (toolName === 'local_analyze_file' && result?.ok) {
+      if (result.analysisType === 'image') {
+        const escapedDesc = result.description.replace(/[&<>"']/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c] || c));
+        finalHtml = '<h1>🔍 ' + result.path + '</h1><p style="font-size:11px; color:#64748b; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px;">Image Analysis (' + (result.size / 1024).toFixed(1) + ' KB)</p><div style="background:#1a1b1f; border:1px solid #1f2025; padding:20px; border-radius:18px; font-family:monospace; font-size:13px; color:#f0e6df; white-space:pre-wrap; overflow-x:auto; max-height:500px; overflow-y:auto; line-height:1.6;"><pre style="margin:0; font-family:inherit; white-space:pre-wrap; word-break:break-word;">' + escapedDesc + '</pre></div>';
+      } else if (result.analysisType === 'audio') {
+        const escapedTranscript = result.transcript.replace(/[&<>"']/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c] || c));
+        finalHtml = '<h1>🔍 ' + result.path + '</h1><p style="font-size:11px; color:#64748b; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px;">Audio Transcription (' + (result.size / 1024).toFixed(1) + ' KB)</p><div style="background:#1a1b1f; border:1px solid #1f2025; padding:20px; border-radius:18px; font-family:monospace; font-size:13px; color:#f0e6df; white-space:pre-wrap; overflow-x:auto; max-height:500px; overflow-y:auto; line-height:1.8;"><pre style="margin:0; font-family:inherit; white-space:pre-wrap; word-break:break-word;">' + escapedTranscript + '</pre></div>';
+      }
+    } else if (toolName === 'local_analyze_file' && result?.error) {
+      finalHtml = '<h1>🔍 File Analysis</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>' + result.error + '</p></div>';
+    } else if (toolName === 'server_read_file' && result?.ok) {
+      if (result.fileType === 'image' && result.dataUrl) {
+        finalHtml = '<h1>🖥️ ' + result.path + '</h1><p style="font-size:11px; color:#64748b; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px;">' + result.path + ' (' + (result.size / 1024).toFixed(1) + ' KB) • ' + result.mimeType + '</p><div style="text-align:center; background:#1a1b1f; border:1px solid #1f2025; border-radius:18px; padding:20px; overflow:hidden;"><img src="' + result.dataUrl + '" alt="' + result.path + '" style="max-width:100%; max-height:500px; border-radius:12px; object-fit:contain;" /></div>';
+      } else if (result.fileType === 'audio' && result.dataUrl) {
+        finalHtml = '<h1>🖥️ ' + result.path + '</h1><p style="font-size:11px; color:#64748b; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px;">' + result.path + ' (' + (result.size / 1024).toFixed(1) + ' KB) • ' + result.mimeType + '</p><div style="text-align:center; background:#1a1b1f; border:1px solid #1f2025; border-radius:18px; padding:20px;"><audio controls style="width:100%;"><source src="' + result.dataUrl + '" type="' + result.mimeType + '">Your browser does not support audio playback.</audio></div>';
+      } else {
+        const escapedContent = (result.content || '').replace(/[&<>"']/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c] || c));
+        finalHtml = '<h1>🖥️ ' + result.path + '</h1><p style="font-size:11px; color:#64748b; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px;">' + (result.size / 1024).toFixed(1) + ' KB • ' + result.mimeType + '</p><div style="background:#1a1b1f; border:1px solid #1f2025; padding:20px; border-radius:18px; font-family:monospace; font-size:12px; color:#d0a78b; white-space:pre-wrap; overflow-x:auto; max-height:500px; overflow-y:auto;"><pre style="margin:0; font-family:inherit; white-space:pre-wrap; word-break:break-word;">' + escapedContent + '</pre></div>';
+      }
+    } else if (toolName === 'server_read_file' && result?.error) {
+      finalHtml = '<h1>🖥️ Server Read</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>' + result.error + '</p></div>';
+    } else if (toolName === 'server_write_file' && result?.ok) {
+      finalHtml = '<h1>🖥️ File Written</h1><div style="background:rgba(16,185,129,0.05); border:1px solid #10b981; padding:20px; border-radius:18px; color:#10b981;"><p>Successfully wrote <strong>"' + result.path + '"</strong></p><p style="margin-top:8px; font-size:13px; color:#94a3b8;">' + (result.size / 1024).toFixed(1) + ' KB written.</p></div>';
+    } else if (toolName === 'server_write_file' && result?.error) {
+      finalHtml = '<h1>🖥️ Server Write</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>' + result.error + '</p></div>';
+    } else if (toolName === 'server_list_directory' && result?.ok) {
+      const rows = result.items.map((e: any) => {
+        const icon = e.type === 'directory' ? '📁' : '📄';
+        const size = e.size ? ' • ' + (e.size / 1024).toFixed(1) + ' KB' : '';
+        return '<div class="wa-item"><div class="wa-avatar">' + icon + '</div><div class="wa-info"><div class="wa-name">' + e.name + '</div><div class="wa-meta">' + e.type + size + '</div></div></div>';
+      }).join('');
+      finalHtml = '<h1>🖥️ ' + (result.path || '/') + '</h1><p style="font-size:12px; color:#64748b; margin-bottom:16px;">' + result.items.length + ' items</p>' + (rows || '<p style="text-align:center; padding:40px; color:#64748b;">This folder is empty.</p>');
+    } else if (toolName === 'server_list_directory' && result?.error) {
+      finalHtml = '<h1>🖥️ List Directory</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>' + result.error + '</p></div>';
+
     } else if (toolName === 'local_read_file' && result?.error) {
       finalHtml = `<h1>📄 Read File</h1><div style="background:rgba(244,67,54,0.1); border:1px solid #f44336; padding:16px; border-radius:12px; color:#f44336;"><p>${result.error}</p></div>`;
     } else if (toolName === 'local_write_file' && result?.ok) {
@@ -2855,10 +2965,13 @@ I have a comprehensive set of skills at my disposal. Every task the user gives m
 - **PROACTIVELY save to memory:** Whenever the user shares personal info (name, preferences, deadlines, contact details, important dates, recurring needs), automatically call add_to_memory to save it for future reference. This builds a persistent knowledge base of each user over time.
 - Trigger: "remember", "save this", "do you remember", "what did we talk about"
 
-**MEDIA UNDERSTANDING SKILLS** -- Analyze images, read web pages, transcribe audio
-- analyze_image: describe images/photos/screenshots including text, objects, colors
+    **MEDIA UNDERSTANDING SKILLS** -- Analyze images, read web pages, transcribe audio
+- analyze_image: describe images/photos/screenshots including text, objects, colors — accepts a URL or base64 dataUrl
 - read_web_page: extract readable content from any URL
-- transcribe_audio: convert speech to text from audio files
+- transcribe_audio: convert speech to text from audio files — accepts base64 audio data
+- When the user sends you an image or audio via WhatsApp, use analyze_image/transcribe_audio directly
+- When you read an image or audio from the local folder via local_read_file, it returns a dataUrl — pass it to analyze_image or transcribe_audio using the imageData/audioData parameter
+- For a single-step file analysis from the local folder, use local_analyze_file instead
 - Trigger: "look at this image", "read this page", "transcribe this", "what's in this picture"
 
 **WHATSAPP ATTACHMENT SKILLS** -- Process files and media from WhatsApp messages
@@ -2884,11 +2997,21 @@ I have a comprehensive set of skills at my disposal. Every task the user gives m
 **LOCAL FILESYSTEM SKILLS** -- Browse, read, and write files on the user's local computer
 - local_connect_folder: Ask the user to select a folder on their computer so you can access local files
 - local_list_directory: List files and folders in the connected directory
-- local_read_file: Read the contents of any text file from the connected folder
+- local_read_file: Read any file (text, image, or audio) from the connected folder — images/audio return a dataUrl you can analyze with analyze_image or transcribe_audio
 - local_write_file: Write or overwrite files in the connected folder
+- local_analyze_file: Read AND analyze a media file in one step — images are described with AI vision, audio is transcribed with speech-to-text
 - Call local_connect_folder first before using the other local_* tools
 - The folder connection persists for the session — the user doesn't need to reconnect for each operation
+- For images and audio from the local folder, prefer local_analyze_file over chaining local_read_file + analyze_image/transcribe_audio manually
 - Trigger: "my files", "local folder", "on my computer", "read this file", "save this to my computer", "browse my files", "open this file"
+
+**SERVER FILESYSTEM SKILLS** -- Read/write files directly on the VPS server
+- server_read_file: Read any file from the server's workspace directory (text, images, audio)
+- server_write_file: Write text files to the server's workspace directory
+- server_list_directory: Browse files and folders on the server
+- No local folder connection needed — these work directly on the server
+- Use these when the user wants to work with files that are already on the server, or wants to save output that should persist regardless of their browser connection
+- Trigger: "server files", "VPS files", "workspace files", "save to server"
 
 **WEB BROWSING SKILLS** -- Navigate websites, fill forms, extract live data
 - Uses cerebras_browser_task for visiting specific URLs, form filling, extracting structured data from live sites
@@ -3683,17 +3806,165 @@ ${historyContext}
                   }
                 },
                 {
+                  name: "server_terminal_run",
+                  description: "Execute terminal commands directly in the server workspace directory. Use for development, file operations, code execution, and project management. Commands run in the workspace root directory with full access to workspace files and directory structure. Requires OpenCode CLI to be installed. Use when you need to run complex commands like 'ls -la', 'npm run build', 'git status', file management, or development workflows in the server environment.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      command: { type: Type.STRING, description: "Terminal command to execute (e.g., 'ls -la', 'npm run build', 'git status'). The command runs in the server workspace directory." },
+                      timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (1-300, default 60)" }
+                    },
+                    required: ["command"]
+                  },
+                },
+                {
                   name: "open_terminal_skills",
-                  description: "Run a terminal task to build apps, run scripts, manage files, or automate anything. When the user asks you to build an app or create a website, always include an appName so the result gets a live preview URL.",
+                  description: "Run a terminal task to build apps, run scripts, manage files, or automate anything. When the user asks you to build an app or create a website, always include an appName so the result gets a live preview URL. Prefer using when Eburon models exhaust their token quota - OpenCode provides unlimited tokens as fallback.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
                       task: { type: Type.STRING, description: "Precise terminal task to perform. Include expected output or constraints. For app generation, include the full path where files should be saved." },
                       appName: { type: Type.STRING, description: "Short URL-safe name for the generated app (e.g. 'todo-list', 'calculator'). Required when building apps. The app will be served live at https://whatsapp.eburon.ai/beatrice-workspace/{userId}/{appName}/." },
                       skill: { type: Type.STRING, description: "Optional skill specialization to request." },
-                      timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (10-300, default 60). Use higher values for app generation." }
+                      timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (10-300, default 60)." },
+                      model: { type: Type.STRING, description: "OpenCode model to use (e.g. 'zenn-ai-large-free', 'deepseek-v4-flash-free'). Default: 'zenn-ai-large-free'. Use when you need to select a specific model instead of the default." }
                     },
                     required: ["task"]
+                  }
+                },
+                {
+                  name: "cerebras_browser_task",
+                  description: "Navigate websites, fill forms, extract data, and automate browser tasks. Use this when the user asks you to browse the web, look up information on a specific website, fill out a web form, extract data from a page, or perform any multi-step browser interaction. After the task completes, present the result naturally.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      task: { type: Type.STRING, description: "Detailed description of what to do in the browser. Be specific about the website, what to find, and what to do with the result. E.g. 'Go to google.com, search for latest AI news, and return the top 3 headlines with links.'" },
+                      model: { type: Type.STRING, enum: ['gpt-oss-120b', 'zai-glm-4.7'], description: "Cerebras model. gpt-oss-120b (120B params, fast) or zai-glm-4.7 (357B params, deeper reasoning). Default: gpt-oss-120b." },
+                      timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (10-300, default 60)" }
+                    },
+                    required: ["task"]
+                  }
+                },
+                {
+                  name: "dial_contact",
+                  description: "Dial a phone number from the user's phonebook using the native phone dialer. This opens the system phone app with the number pre-filled so the user can tap to call. Use this when the user asks you to call someone (e.g., while driving, hands-free). Requires make_calls permission enabled in settings.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      phoneNumber: { type: Type.STRING, description: "Phone number to dial (e.g. '+1-555-123-4567')" },
+                      timeRemaining: { type: Type.NUMBER, description: "Number of seconds the user has to accept the call (e.g. 10 for 10 seconds)" }
+                    },
+                    required: ["phoneNumber", "timeRemaining"]
+                  }
+                },
+                {
+                  name: "handle_call_offer",
+                  description: "Handle an incoming call offer from WhatsApp or another service. Shows a notification to the user with options to accept or decline the call.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      callId: { type: Type.STRING, description: "Unique identifier for the call" },
+                      callerName: { type: Type.STRING, description: "Name of the caller" },
+                      callerNumber: { type: Type.STRING, description: "Phone number of the caller" },
+                      callType: { type: Type.STRING, enum: ['voice', 'video'], description: "Type of call" }
+                    },
+                    required: ["callId", "callerName", "callerNumber", "callType"]
+                  }
+                },
+                {
+                  name: "end_call",
+                  description: "End an active call or reject a call offer. Use this when the user wants to end a call or reject an incoming call.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      callId: { type: Type.STRING, description: "Unique identifier of the call to end" }
+                    },
+                    required: ["callId"]
+                  }
+                },
+                {
+                  name: "mute_call",
+                  description: "Mute or unmute the microphone for an active call. Use this to control the microphone during a call.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      callId: { type: Type.STRING, description: "Unique identifier of the call" },
+                      muted: { type: Type.BOOLEAN, description: "Whether to mute (true) or unmute (false) the microphone" }
+                    },
+                    required: ["callId", "muted"]
+                  }
+                },
+                {
+                  name: "send_sms",
+                  description: "Send an SMS message to a phone number. Use this to send text messages to contacts.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      phoneNumber: { type: Type.STRING, description: "Phone number to send SMS to (e.g. '+1-555-123-4567')" },
+                      message: { type: Type.STRING, description: "SMS message content to send" }
+                    },
+                    required: ["phoneNumber", "message"]
+                  }
+                },
+                {
+                  name: "handle_sms",
+                  description: "Handle an incoming SMS message. Use this when a user receives a text message.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      from: { type: Type.STRING, description: "Phone number of the sender" },
+                      message: { type: Type.STRING, description: "SMS message content" }
+                    },
+                    required: ["from", "message"]
+                  }
+                },
+                {
+                  name: "set_user_reminder",
+                  description: "Set a reminder for a future date/time. Use this when the user wants to be reminded of something, schedule an event, or set a notification.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      title: { type: Type.STRING, description: "Title or subject of the reminder" },
+                      dateTime: { type: Type.STRING, description: "Date and time for the reminder (e.g. '2024-12-25T15:00:00')" },
+                      description: { type: Type.STRING, description: "Additional details about the reminder" }
+                    },
+                    required: ["title", "dateTime"]
+                  }
+                },
+                {
+                  name: "get_user_location",
+                  description: "Get the current geographical location of the user. Use this when you need to determine the user's location for context-aware responses or location-based services.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {}
+                  }
+                },
+                {
+                  name: "create_calendar_event",
+                  description: "Create a new calendar event. Use this to schedule meetings, appointments, or events in the user's calendar.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      title: { type: Type.STRING, description: "Title of the calendar event" },
+                      startTime: { type: Type.STRING, description: "Start time (e.g. '2024-12-25T15:00:00')" },
+                      endTime: { type: Type.STRING, description: "End time (e.g. '2024-12-25T16:00:00')" },
+                      description: { type: Type.STRING, description: "Event description or details" },
+                      location: { type: Type.STRING, description: "Event location" },
+                      attendees: { type: Type.ARRAY, description: "List of email addresses of attendees" }
+                    },
+                    required: ["title", "startTime", "endTime"]
+                  }
+                },
+                {
+                  name: "search_youtube",
+                  description: "Search YouTube videos. Use this to find videos based on keywords. Returns video titles, descriptions, thumbnails, and video IDs.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      query: { type: Type.STRING, description: "Search query for YouTube videos" },
+                      maxResults: { type: Type.NUMBER, description: "Maximum number of results to return (default 10)" }
+                    },
+                    required: ["query"]
                   }
                 },
                 {
@@ -3936,17 +4207,99 @@ ${historyContext}
                 },
                 {
                   name: "local_write_file",
-                  description: "Write or overwrite a file in the user's locally connected folder. Creates the file if it doesn't exist. Can also create files in subdirectories. Requires a connected folder (call local_connect_folder first).",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      path: { type: Type.STRING, description: "Path where to write the file, relative to the connected folder root (e.g. 'output.txt', 'src/report.md')." },
-                      content: { type: Type.STRING, description: "The full text content to write to the file." }
-                    },
-                    required: ["path", "content"]
+                   description: "Write or overwrite a file in the user's locally connected folder. Creates the file if it doesn't exist. Can also create files in subdirectories. Requires a connected folder (call local_connect_folder first).",
+                   parameters: {
+                     type: Type.OBJECT,
+                     properties: {
+                       path: { type: Type.STRING, description: "Path where to write the file, relative to the connected folder root (e.g. 'output.txt', 'src/report.md')." },
+                       content: { type: Type.STRING, description: "The full text content to write to the file." }
+                     },
+                     required: ["path", "content"]
+                   }
+                 },
+                 {
+                   name: "local_analyze_file",
+                   description: "Read and analyze a media file (image or audio) from the user's locally connected folder in a single step. Use this for images (describes contents, text, objects, colors) and audio files (speech-to-text transcription). Requires a connected folder (call local_connect_folder first).",
+                   parameters: {
+                     type: Type.OBJECT,
+                     properties: {
+                       path: { type: Type.STRING, description: "Path to the file, relative to the connected folder root (e.g. 'photo.jpg', 'recording.ogg')." },
+                       prompt: { type: Type.STRING, description: "Optional specific question about an image (e.g. 'What does this chart show?'). Only used for images." }
+                     },
+                     required: ["path"]
+                   }
+                 },
+                 {
+                   name: "server_read_file",
+                   description: "Read a file from the server's filesystem (VPS). Use this for files stored on the server's workspace directory. Returns file content as text, or image/audio as base64 data URL. Does NOT require a local folder connection.",
+                   parameters: {
+                     type: Type.OBJECT,
+                     properties: {
+                       path: { type: Type.STRING, description: "Path to the file relative to the server workspace root (e.g. 'documents/report.md', 'images/photo.jpg')." }
+                     },
+                     required: ["path"]
+                   }
+                 },
+                 {
+                   name: "server_write_file",
+                   description: "Write or overwrite a file on the server's filesystem (VPS). Use this to save files directly to the server's workspace directory. Does NOT require a local folder connection.",
+                   parameters: {
+                     type: Type.OBJECT,
+                     properties: {
+                       path: { type: Type.STRING, description: "Path where to write the file, relative to the server workspace root (e.g. 'output.txt', 'docs/report.md')." },
+                       content: { type: Type.STRING, description: "The full text content to write to the file." }
+                     },
+                     required: ["path", "content"]
+                   }
+                 },
+                  {
+                    name: "server_list_directory",
+                    description: "List files and directories on the server's filesystem (VPS). Use this to explore what files are stored on the server's workspace directory. Does NOT require a local folder connection.",
+                    parameters: {
+                      type: Type.OBJECT,
+                      properties: {
+                        path: { type: Type.STRING, description: "Optional subdirectory path relative to the server workspace root. Leave empty to list the root." }
+                      }
+                    }
+                  },
+                  {
+                    name: "local_daemon_status",
+                    description: "Check if the local folder connector is running on the user's machine. Call this before using local_setup_workspace, local_setup_status, or local_run_terminal. If offline, Beatrice will show a Connect Local Folder button to help the user set it up.",
+                    parameters: {
+                      type: Type.OBJECT,
+                      properties: {}
+                    }
+                  },
+                  {
+                    name: "local_run_terminal",
+                    description: "Execute a terminal command on the USER'S LOCAL MACHINE (not the server). Requires the local folder to be connected. The command runs in the user's home directory or the connected folder. Call local_daemon_status first to verify the connection is active.",
+                    parameters: {
+                      type: Type.OBJECT,
+                      properties: {
+                        command: { type: Type.STRING, description: "Shell command to execute on the user's local machine (e.g. 'ls -la', 'npm run build', 'git status', 'opencode --version')." },
+                        cwd: { type: Type.STRING, description: "Working directory path on the user's machine. Defaults to the user's home directory. Use '.' for the connected local folder root." },
+                        timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (1-900, default 120)." }
+                      },
+                      required: ["command"]
+                    }
+                  },
+                  {
+                    name: "local_setup_workspace",
+                    description: "FULL WORKSPACE SETUP on the user's local machine. Installs: 1) Node.js 22, 2) OpenCode CLI (with Zen free model swap chain for unlimited tokens), 3) Ollama (local LLM server), 4) media-pipe/eburon-sandbox-worker model, 5) Configures OpenCode to use the model as primary with Zen fallbacks. After setup, launch with: opencode --model media-pipe/eburon-sandbox-worker. Requires the local folder to be connected. Call local_daemon_status first. This may take several minutes.",
+                    parameters: {
+                      type: Type.OBJECT,
+                      properties: {}
+                    }
+                  },
+                  {
+                    name: "local_setup_status",
+                    description: "Check the full local workspace setup status. Returns which components are installed: Node.js, OpenCode, Ollama, and the eburon-sandbox-worker model. Call this before local_setup_workspace to see what's already installed.",
+                    parameters: {
+                      type: Type.OBJECT,
+                      properties: {}
+                    }
                   }
-                }
-              ] as FunctionDeclaration[]
+               ] as FunctionDeclaration[]
             }
           ],
           inputAudioTranscription: {},
@@ -5062,8 +5415,29 @@ ${historyContext}
                           }
                           const fileHandle = await dirHandle.getFileHandle(fileName);
                           const file = await fileHandle.getFile();
-                          const text = await file.text();
-                          result = { ok: true, path: filePath, content: text, size: file.size, mimeType: file.type || 'text/plain', lastModified: new Date(file.lastModified).toISOString() };
+                          const mime = file.type || 'application/octet-stream';
+                          const isText = mime.startsWith('text/') || mime === 'application/json' || mime === 'application/javascript' || /\.(txt|md|json|js|ts|jsx|tsx|py|rb|go|rs|css|html|xml|yaml|yml|toml|ini|cfg|log|csv|svg)$/i.test(fileName);
+                          const isImage = mime.startsWith('image/') && mime !== 'image/svg+xml';
+                          const isAudio = mime.startsWith('audio/');
+                          if (isText) {
+                            const text = await file.text();
+                            result = { ok: true, path: filePath, content: text, size: file.size, mimeType: mime, lastModified: new Date(file.lastModified).toISOString(), fileType: 'text' };
+                          } else if (isImage) {
+                            const buf = await file.arrayBuffer();
+                            const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                            const dataUrl = `data:${mime};base64,${base64}`;
+                            result = { ok: true, path: filePath, dataUrl, size: file.size, mimeType: mime, lastModified: new Date(file.lastModified).toISOString(), fileType: 'image' };
+                          } else if (isAudio) {
+                            const buf = await file.arrayBuffer();
+                            const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                            const dataUrl = `data:${mime};base64,${base64}`;
+                            result = { ok: true, path: filePath, dataUrl, size: file.size, mimeType: mime, lastModified: new Date(file.lastModified).toISOString(), fileType: 'audio' };
+                          } else {
+                            const buf = await file.arrayBuffer();
+                            const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                            const dataUrl = `data:${mime};base64,${base64}`;
+                            result = { ok: true, path: filePath, dataUrl, size: file.size, mimeType: mime, lastModified: new Date(file.lastModified).toISOString(), fileType: 'binary' };
+                          }
                         } catch (e: any) {
                           result = { ok: false, error: e.message || 'Failed to read file' };
                         }
@@ -5093,6 +5467,204 @@ ${historyContext}
                         } catch (e: any) {
                           result = { ok: false, error: e.message || 'Failed to write file' };
                         }
+                      }
+                    } else if (callName === 'local_analyze_file') {
+                      if (!rootDirRef.current) {
+                        result = { ok: false, error: 'No local folder connected. Ask the user to run local_connect_folder first.' };
+                      } else if (!(call.args as any)?.path) {
+                        result = { ok: false, error: 'No file path provided.' };
+                      } else {
+                        try {
+                          const filePath = (call.args as any).path;
+                          const prompt = (call.args as any)?.prompt || '';
+                          const parts = filePath.split('/').filter(Boolean);
+                          const fileName = parts.pop()!;
+                          let dirHandle = rootDirRef.current;
+                          for (const part of parts) {
+                            dirHandle = await dirHandle.getDirectoryHandle(part);
+                          }
+                          const fileHandle = await dirHandle.getFileHandle(fileName);
+                          const file = await fileHandle.getFile();
+                          const mime = file.type || 'application/octet-stream';
+                          const buf = await file.arrayBuffer();
+                          const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                          const dataUrl = `data:${mime};base64,${base64}`;
+                          const isImage = mime.startsWith('image/') && mime !== 'image/svg+xml';
+                          const isAudio = mime.startsWith('audio/');
+                          if (isImage) {
+                            const resp = await fetch('/api/eburon/analyze-image', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                imageData: dataUrl,
+                                prompt: prompt || 'Describe this image in detail. What do you see? Include text, objects, people, colors, and any relevant details.',
+                              }),
+                            });
+                            const data = await resp.json();
+                            if (!resp.ok) throw new Error(data.error || 'Image analysis failed');
+                            result = { ok: true, path: filePath, analysisType: 'image', description: data.description, size: file.size, mimeType: mime };
+                          } else if (isAudio) {
+                            const resp = await fetch('/api/eburon/transcribe-audio', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                audioData: base64,
+                                mimeType: mime,
+                                prompt: prompt || 'Transcribe the audio content exactly as spoken. Include speaker labels if distinguishable.',
+                              }),
+                            });
+                            const data = await resp.json();
+                            if (!resp.ok) throw new Error(data.error || 'Transcription failed');
+                            result = { ok: true, path: filePath, analysisType: 'audio', transcript: data.transcript, size: file.size, mimeType: mime };
+                          } else {
+                            result = { ok: false, error: `Unsupported file type: ${mime}. local_analyze_file only supports images and audio files.` };
+                          }
+                        } catch (e: any) {
+                          result = { ok: false, error: e.message || 'File analysis failed' };
+                        }
+                      }
+                    } else if (callName === 'local_daemon_status') {
+                      let health = await checkLocalDaemon();
+                      if (health) {
+                        result = { ok: true, status: 'online', platform: (health as any).platform, home: (health as any).home, message: 'Local folder is connected. You can now use local_setup_workspace (full setup), local_setup_status (check components), and local_run_terminal (run commands).' };
+                      } else {
+                        // Show daemon start dialog — wait for user to confirm
+                        setAwaitingDaemon(true);
+                        const userConfirmed = await new Promise<boolean>((resolve) => {
+                          daemonResolverRef.current = resolve;
+                        });
+                        if (!userConfirmed) {
+                          result = { ok: false, error: 'User cancelled folder connection.' };
+                        } else {
+                          // Poll for daemon to come online
+                          const connected = await pollForDaemon(15, 2000);
+                          if (connected) {
+                            health = await checkLocalDaemon();
+                            result = { ok: true, status: 'online', platform: (health as any).platform, home: (health as any).home, message: 'Local folder is now connected! You can use local_setup_workspace, local_setup_status, and local_run_terminal.' };
+                          } else {
+                            result = { ok: false, status: 'offline', error: 'Connection not detected after 30 seconds. Open the downloaded file from your Downloads folder and make sure the terminal stays open — then try local_daemon_status again.' };
+                          }
+                        }
+                      }
+                    } else if (callName === 'local_run_terminal') {
+                      if (!daemonConnectedRef.current) {
+                        result = { ok: false, error: 'Local folder is not connected yet. Ask the user to connect their folder first (use local_daemon_status for instructions).' };
+                      } else {
+                        try {
+                          const command = (call.args as any)?.command;
+                          const cwd = (call.args as any)?.cwd || '.';
+                          const timeout = Math.min((call.args as any)?.timeout || 120, 900);
+                          if (!command) { result = { ok: false, error: 'No command provided.' }; }
+                          else {
+                            const resp = await fetch(`http://127.0.0.1:${daemonPortRef.current}/run`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ command, cwd, timeout }),
+                              signal: AbortSignal.timeout((timeout + 10) * 1000),
+                            });
+                            const data = await resp.json();
+                            result = {
+                              ok: data.ok && data.exitCode === 0,
+                              stdout: data.stdout,
+                              stderr: data.stderr,
+                              exitCode: data.exitCode,
+                              error: data.error || (data.exitCode !== 0 ? `Command exited with code ${data.exitCode}` : undefined),
+                              command,
+                              cwd: data.cwd,
+                            };
+                          }
+                        } catch (e: any) {
+                          daemonConnectedRef.current = false;
+                          setDaemonStatus('offline');
+                          result = { ok: false, error: e.message || 'Failed to reach local connector' };
+                        }
+                      }
+                    } else if (callName === 'local_setup_status') {
+                      if (!daemonConnectedRef.current) {
+                        result = { ok: false, error: 'Local folder is not connected yet. Ask the user to connect their folder first.' };
+                      } else {
+                        try {
+                          const resp = await fetch(`http://127.0.0.1:${daemonPortRef.current}/setup-status`, {
+                            signal: AbortSignal.timeout(10_000),
+                          });
+                          const data = await resp.json();
+                          result = { ok: true, ...data, message: data.allReady ? 'Workspace is fully set up!' : 'Some components need installation. Use local_setup_workspace to install everything.' };
+                        } catch (e: any) {
+                          result = { ok: false, error: e.message || 'Failed to check setup status' };
+                        }
+                      }
+                    } else if (callName === 'local_setup_workspace') {
+                      if (!daemonConnectedRef.current) {
+                        result = { ok: false, error: 'Local folder is not connected yet. Ask the user to connect their folder first (use local_daemon_status for instructions).' };
+                      } else {
+                        try {
+                          setTasks(prev => [...prev, { id: taskId, serviceName: 'Local Setup', action: 'Setting up full workspace (Node.js + OpenCode + Ollama + model)...', status: 'processing' }]);
+                          const resp = await fetch(`http://127.0.0.1:${daemonPortRef.current}/setup`, {
+                            method: 'POST',
+                            signal: AbortSignal.timeout(900_000),
+                          });
+                          const data = await resp.json();
+                          if (data.ok) {
+                            result = { ok: true, message: 'Full workspace is ready! Node.js 22 + OpenCode CLI (with Zen free model chain) + Ollama + eburon-sandbox-worker are all installed and running.', steps: data.steps, summary: data.summary, nextSteps: data.nextSteps };
+                          } else {
+                            result = { ok: false, error: 'Some components failed to install. Check steps for details.', steps: data.steps, summary: data.summary, nextSteps: data.nextSteps };
+                          }
+                          setTasks(prev => prev.filter(t => t.id !== taskId));
+                        } catch (e: any) {
+                          daemonConnectedRef.current = false;
+                          setDaemonStatus('offline');
+                          setTasks(prev => prev.filter(t => t.id !== taskId));
+                          result = { ok: false, error: e.message || 'Failed to set up workspace' };
+                        }
+                      }
+                    } else if (callName === 'server_read_file') {
+                      try {
+                        const filePath = (call.args as any)?.path;
+                        if (!filePath) { result = { ok: false, error: 'No file path provided.' }; }
+                        else {
+                          const resp = await fetch('/api/filesystem/read', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: filePath }),
+                          });
+                          const data = await resp.json();
+                          if (!resp.ok) throw new Error(data.error || 'Read failed');
+                          result = data;
+                        }
+                      } catch (e: any) {
+                        result = { ok: false, error: e.message || 'Server read failed' };
+                      }
+                    } else if (callName === 'server_write_file') {
+                      try {
+                        const filePath = (call.args as any)?.path;
+                        const content = (call.args as any)?.content;
+                        if (!filePath || content === undefined) { result = { ok: false, error: 'path and content required' }; }
+                        else {
+                          const resp = await fetch('/api/filesystem/write', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: filePath, content }),
+                          });
+                          const data = await resp.json();
+                          if (!resp.ok) throw new Error(data.error || 'Write failed');
+                          result = data;
+                        }
+                      } catch (e: any) {
+                        result = { ok: false, error: e.message || 'Server write failed' };
+                      }
+                    } else if (callName === 'server_list_directory') {
+                      try {
+                        const dirPath = (call.args as any)?.path || '';
+                        const resp = await fetch('/api/filesystem/list', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ path: dirPath }),
+                        });
+                        const data = await resp.json();
+                        if (!resp.ok) throw new Error(data.error || 'List failed');
+                        result = data;
+                      } catch (e: any) {
+                        result = { ok: false, error: e.message || 'Server list failed' };
                       }
                     }
 
@@ -5886,6 +6458,45 @@ ${historyContext}
                 className="px-5 py-2.5 rounded-xl text-sm font-bold text-black bg-[#d0a78b] hover:bg-[#c49a7d] transition-colors"
               >Select Folder</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {awaitingDaemon && (
+        <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center">
+          <div className="bg-[#1a1b1f] border border-[#1f2025] rounded-2xl p-8 max-w-md w-full mx-4 text-center">
+            <div className="text-4xl mb-4">📁</div>
+            <h3 className="text-lg font-bold text-white mb-2">
+              {daemonLoading ? 'Connecting...' : 'Connect Local Folder'}
+            </h3>
+            {daemonLoading ? (
+              <>
+                <div className="flex justify-center mb-4">
+                  <Loader2 className="w-8 h-8 text-[#10b981] animate-spin" />
+                </div>
+                <p className="text-sm text-[#64748b] mb-4">Waiting for the connection. Open the downloaded file from your browser's downloads bar — a terminal will appear.</p>
+                <div className="bg-[#0f1117] border border-[#25262b] rounded-xl p-3 mb-4 text-left">
+                  <p className="text-xs text-[#f59e0b]">If the file doesn't open, check your Downloads folder for <code className="text-green-400">beatrice-daemon{(() => { const p = navigator.platform?.toLowerCase() ?? ''; return p.includes('mac') ? '.command' : p.includes('win') ? '.bat' : '.sh'; })()}</code> and double-click it.</p>
+                </div>
+                <button
+                  onClick={() => { setDaemonLoading(false); setAwaitingDaemon(false); if (daemonResolverRef.current) { daemonResolverRef.current(false); daemonResolverRef.current = null; } }}
+                  className="px-5 py-2.5 rounded-xl text-sm text-[#64748b] border border-[#1f2025] hover:bg-[#25262b] transition-colors"
+                >Cancel</button>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-[#64748b] mb-4">To access your local files and run commands, Beatrice needs a small connector. You'll only need to do this once.</p>
+                <button
+                  onClick={handleDaemonStartClick}
+                  className="w-full px-5 py-3 rounded-xl text-sm font-bold text-black bg-[#10b981] hover:bg-[#059669] transition-colors mb-3"
+                >Continue</button>
+                <p className="text-xs text-[#64748b] mb-4">After clicking, open the downloaded file from your browser's downloads. A terminal will open — keep it running.</p>
+                <button
+                  onClick={() => { setAwaitingDaemon(false); if (daemonResolverRef.current) { daemonResolverRef.current(false); daemonResolverRef.current = null; } }}
+                  className="px-5 py-2.5 rounded-xl text-sm text-[#64748b] border border-[#1f2025] hover:bg-[#25262b] transition-colors"
+                >Cancel</button>
+              </>
+            )}
           </div>
         </div>
       )}

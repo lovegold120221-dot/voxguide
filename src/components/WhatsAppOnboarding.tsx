@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 import {
-  ArrowLeft, Check, CheckCheck, Laptop, Loader2, Phone, QrCode, ShieldCheck,
+  ArrowLeft, Check, CheckCheck, Folder, Laptop, Loader2, Phone, QrCode, ShieldCheck,
   Smartphone, X,
 } from 'lucide-react';
 import {
@@ -11,6 +11,7 @@ import {
   saveWhatsAppAdminConfig,
   startWhatsAppPairing,
 } from '../lib/whatsappClient';
+import { saveLocalFolderState, getLocalFolderState } from '../lib/db';
 
 type PermissionKey =
   | 'send_messages' | 'read_chats' | 'access_contacts' | 'manage_contacts'
@@ -50,7 +51,23 @@ const defaultPermissions = allPermissions.reduce((acc, p) => {
 }, {} as Record<PermissionKey, boolean>);
 
 export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboardingProps) {
-  const [step, setStep] = useState<'pair' | 'permissions' | 'location'>('pair');
+  const isDesktop = (() => {
+    if (typeof window === 'undefined') return true;
+    const ua = navigator.userAgent || '';
+    const mobileRegex = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|CriOS|FxiOS/i;
+    if (mobileRegex.test(ua)) return false;
+    if ('ontouchstart' in window || navigator.maxTouchPoints > 2) {
+      // Tablet: iPadOS 13+ spoofs Mac UA but has touch
+      return false;
+    }
+    return true;
+  })();
+
+  const steps = isDesktop
+    ? (['localFolder', 'pair', 'permissions', 'location'] as const)
+    : (['pair', 'permissions', 'location'] as const);
+
+  const [step, setStep] = useState<typeof steps[number]>(isDesktop ? 'localFolder' : 'pair');
   const [pairMethod, setPairMethod] = useState<'qr' | 'phone'>('qr');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [pairing, setPairing] = useState(false);
@@ -63,6 +80,12 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [checking, setChecking] = useState(true);
+
+  // ── Step 4: Local folder connection ──
+  const [folderConnecting, setFolderConnecting] = useState(false);
+  const [folderName, setFolderName] = useState('');
+  const [daemonLoading, setDaemonLoading] = useState(false);
+  const [folderError, setFolderError] = useState('');
 
   // Check current status on mount
   useEffect(() => {
@@ -99,6 +122,24 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
       setChecking(false);
     })();
   }, [user.uid]);
+
+  // Skip folder step if already connected (persisted from previous session)
+  useEffect(() => {
+    if (step !== 'localFolder' || !isDesktop) return;
+    (async () => {
+      try {
+        const state = await getLocalFolderState(user.uid);
+        if (state?.folderHandle && state.folderName) {
+          try {
+            const resp = await fetch('http://127.0.0.1:55420/health', { signal: AbortSignal.timeout(2000) });
+            if (resp.ok) {
+              setStep('pair');
+            }
+          } catch {}
+        }
+      } catch {}
+    })();
+  }, [step, isDesktop, user.uid]);
 
   const handleStartPair = async () => {
     setPairing(true);
@@ -177,6 +218,76 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
     }
   };
 
+  // ── Local folder connection ──
+  const handleFolderConnect = async () => {
+    setFolderConnecting(true);
+    setFolderError('');
+    try {
+      if (!('showDirectoryPicker' in window)) {
+        throw new Error('Your browser does not support folder access. Try Chrome or Edge.');
+      }
+      const handle = await (window as any).showDirectoryPicker();
+      setFolderName(handle.name);
+
+      // Persist the folder handle so we skip this step on next login
+      saveLocalFolderState({
+        userId: user.uid,
+        folderName: handle.name,
+        folderHandle: handle,
+        daemonConnected: false,
+      });
+
+      // Now download the daemon launcher
+      setDaemonLoading(true);
+      const isMac = navigator.platform?.toLowerCase().includes('mac') ?? false;
+      const isWin = navigator.platform?.toLowerCase().includes('win') ?? false;
+      const ext = isMac ? '.command' : isWin ? '.bat' : '.sh';
+      const filename = `beatrice-daemon${ext}`;
+
+      const script = isMac
+        ? `#!/bin/bash\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\nnode ~/Downloads/beatrice-local-daemon.mjs\n`
+        : isWin
+          ? `@echo off\ncd /d %USERPROFILE%\\Downloads\nif not exist beatrice-local-daemon.mjs (\n  curl -sS -o beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\n)\nnode beatrice-local-daemon.mjs\npause\n`
+          : `#!/usr/bin/env bash\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
+
+      const blob = new Blob([script], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      // Poll for daemon connection
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const resp = await fetch('http://127.0.0.1:55420/health', { signal: AbortSignal.timeout(2000) });
+          if (resp.ok) {
+            saveLocalFolderState({ userId: user.uid, folderName: folderName || handle.name, folderHandle: handle, daemonConnected: true });
+            setDaemonLoading(false);
+            setStep('pair');
+            return;
+          }
+        } catch {}
+      }
+      // Timeout — still let them through, daemon isn't critical for entering the app
+      setDaemonLoading(false);
+      setStep('pair');
+    } catch (e: any) {
+      if (e.name === 'AbortError' || e.message?.includes('cancelled')) {
+        setFolderError('Folder selection was cancelled. Please select a folder to continue.');
+      } else {
+        setFolderError(e.message || 'Failed to connect folder');
+      }
+    } finally {
+      setFolderConnecting(false);
+      setDaemonLoading(false);
+    }
+  };
+
   if (checking) {
     return (
       <div className="min-h-[100dvh] bg-[#111b21] text-[#e9edef] flex items-center justify-center p-4">
@@ -197,19 +308,19 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
 
       {/* Step indicator */}
       <div className="flex items-center justify-center gap-1 sm:gap-2 px-2 sm:px-4 py-3 sm:py-4 bg-[#0b141a] overflow-x-auto">
-        {['pair', 'permissions', 'location'].map((s, i) => (
+        {steps.map((s, i) => (
           <div key={s} className="flex items-center gap-1 sm:gap-2 shrink-0">
             <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-[10px] sm:text-xs font-bold ${
               step === s ? 'bg-[#00a884] text-black' :
-              ['pair', 'permissions', 'location'].indexOf(step) > i ? 'bg-[#00a884]/30 text-[#00a884]' :
+              steps.indexOf(step) > i ? 'bg-[#00a884]/30 text-[#00a884]' :
               'bg-[#202c33] text-[#8696a0]'
             }`}>
-              {['pair', 'permissions', 'location'].indexOf(step) > i ? <Check className="w-3 h-3 sm:w-4 sm:h-4" /> : i + 1}
+              {steps.indexOf(step) > i ? <Check className="w-3 h-3 sm:w-4 sm:h-4" /> : i + 1}
             </div>
             <span className={`text-[10px] sm:text-xs whitespace-nowrap ${step === s ? 'text-[#e9edef] font-medium' : 'text-[#8696a0]'}`}>
-              {s === 'pair' ? 'Link' : s === 'permissions' ? 'Permissions' : 'Location'}
+              {s === 'localFolder' ? 'Folder' : s === 'pair' ? 'Link' : s === 'permissions' ? 'Permissions' : 'Location'}
             </span>
-            {i < 2 && <div className="w-4 sm:w-8 h-px bg-[#222d34] shrink-0" />}
+            {i < steps.length - 1 && <div className="w-4 sm:w-8 h-px bg-[#222d34] shrink-0" />}
           </div>
         ))}
       </div>
@@ -358,10 +469,58 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
               className="w-full bg-[#00a884] text-black font-semibold rounded-lg py-2.5 sm:py-3 hover:bg-[#06cf9c] text-xs sm:text-sm">
               Allow Location Access
             </button>
-            <button onClick={onComplete}
+            <button onClick={() => (isDesktop ? setStep('localFolder') : onComplete())}
               className="w-full text-xs sm:text-sm text-[#8696a0] hover:text-[#e9edef] py-2">
               Skip, I'll do it later
             </button>
+          </div>
+        )}
+
+        {/* ── STEP 4: CONNECT LOCAL FOLDER (Desktop only) ── */}
+        {step === 'localFolder' && (
+          <div className="w-full px-4 sm:px-6 py-4 sm:py-6 max-w-lg mx-auto space-y-4 sm:space-y-6">
+            <div className="text-center">
+              <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-[#00a884]/20 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+                <Folder className="w-6 h-6 sm:w-8 sm:h-8 text-[#00a884]" />
+              </div>
+              <h2 className="text-lg sm:text-xl font-semibold mb-1 sm:mb-2">Connect Local Folder</h2>
+              <p className="text-xs sm:text-sm text-[#8696a0] mb-4 sm:mb-6">
+                {folderName
+                  ? `Connected to "${folderName}". Waiting for connector to start...`
+                  : 'Beatrice needs access to your local files and terminal. Select a folder on your computer and a small connector will start running.'}
+              </p>
+            </div>
+
+            {folderError && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-xs text-red-400 text-center">
+                {folderError}
+              </div>
+            )}
+
+            {daemonLoading ? (
+              <div className="space-y-4">
+                <div className="flex justify-center">
+                  <Loader2 className="w-8 h-8 text-[#00a884] animate-spin" />
+                </div>
+                <p className="text-xs text-center text-[#8696a0]">
+                  Waiting for the connector to start. Open the downloaded file from your browser's downloads bar.
+                </p>
+                <div className="bg-[#182229] border border-[#222d34] rounded-lg p-4 text-left">
+                  <p className="text-xs text-[#f59e0b] mb-2">File not opening?</p>
+                  <p className="text-xs text-[#8696a0]">
+                    Check your Downloads folder for <code className="text-green-400 text-xs">
+                      beatrice-daemon{(() => { const p = navigator.platform?.toLowerCase() ?? ''; return p.includes('mac') ? '.command' : p.includes('win') ? '.bat' : '.sh'; })()}
+                    </code> and double-click it. Keep the terminal window open.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <button onClick={handleFolderConnect}
+                disabled={folderConnecting}
+                className="w-full bg-[#00a884] text-black font-semibold rounded-lg py-2.5 sm:py-3 hover:bg-[#06cf9c] text-xs sm:text-sm disabled:opacity-50">
+                {folderConnecting ? <span className="flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Connecting...</span> : 'Select Folder & Connect'}
+              </button>
+            )}
           </div>
         )}
       </div>
