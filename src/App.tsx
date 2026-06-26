@@ -24,6 +24,7 @@ import { PWAUpdatePrompt } from './components/PWAUpdatePrompt';
 import { usePWA } from './hooks/usePWA';
 import { APP_VERSION } from './version';
 import { LocalFolderProvider } from './lib/localFolderContext';
+import { usePersistedUserSetting } from './lib/usePersistedUserSetting';
 import { FolderWatcher } from './components/FolderWatcher';
 import { BEATRICE_ONBOARDING_VERSION, getLocalFolderState } from './lib/db';
 
@@ -50,7 +51,6 @@ function applyTheme(theme: Theme) {
 }
 
 export default function App() {
-  const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
@@ -58,17 +58,21 @@ export default function App() {
 
   const pwa = usePWA();
 
+  // Auto-persisted to Supabase user_settings + localStorage (see usePersistedUserSetting).
+  const [theme, setTheme] = usePersistedUserSetting('theme', user?.uid ?? null, getInitialTheme());
+
   // Apply theme class to <html> on mount and changes
   useEffect(() => { applyTheme(theme); }, [theme]);
 
   const toggleTheme = useCallback(() => {
     setTheme(prev => {
       const next = prev === 'dark' ? 'light' : 'dark';
-      try { localStorage.setItem('beatrice_theme', next); } catch {}
+      // Hook's setter writes localStorage + Supabase for us.
       return next;
     });
   }, []);
-  const [authLanguage, setAuthLanguage] = useState(() => {
+  // Auto-persisted to Supabase user_settings + localStorage (see usePersistedUserSetting).
+  const [authLanguage, setAuthLanguage] = usePersistedUserSetting('language', user?.uid ?? null, () => {
     try { return localStorage.getItem('beatrice_language') || 'en'; } catch { return 'en'; }
   });
   const storeToken = useCallback((token: string, uid: string, refreshToken?: string) => {

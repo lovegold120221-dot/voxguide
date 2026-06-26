@@ -14,6 +14,7 @@ import {
 import { listOutputs, deleteOutput, type WorkspaceOutput } from '../lib/workspace';
 import { LANGUAGES } from '../constants';
 import { getEnv } from '../lib/env';
+import { persistUserSettings } from '../lib/userSettingsSync';
 import { LocalFolderPanel } from './LocalFolderPanel';
 
 const VOICE_ALIASES = [
@@ -35,7 +36,7 @@ interface ProfilePageProps {
   contextSize: number;
   setContextSize: (v: number) => void;
   authLanguage: string;
-  onSetLanguage: (v: string) => void;
+  onSetLanguage: (v: string, opts?: { skipSync?: boolean }) => void;
   selectedVoice: string;
   setSelectedVoice: (v: string) => void;
   saveSettings: (callbacks?: { onSuccess?: () => void; onError?: (msg: string) => void }) => Promise<void>;
@@ -55,10 +56,12 @@ function loadLocalDomains(): string[] {
   }
 }
 
-function saveLocalDomains(domains: string[]) {
+function saveLocalDomains(domains: string[], userId: string | null) {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(domains));
   } catch {}
+  // Mirror to Supabase so the domain list survives a different device.
+  void persistUserSettings(userId, { knowledge_domains: domains });
 }
 
 export function ProfilePage({ 
@@ -615,7 +618,7 @@ export function ProfilePage({
               <select
                 id="language-select"
                 value={authLanguage}
-                onChange={(e) => { onSetLanguage(e.target.value); try { localStorage.setItem('beatrice_language', e.target.value); } catch {} }}
+                onChange={(e) => onSetLanguage(e.target.value)}
                 className="bg-transparent text-[15px] text-zinc-400 outline-none text-right cursor-pointer"
                 aria-label="Select Language"
                 title="Select Language"

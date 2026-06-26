@@ -5,6 +5,7 @@ import { supabase, handleDbError } from '../lib/supabase';
 import { LiveServerMessage, Modality, Type, FunctionDeclaration, getVoiceClient } from '../lib/voiceSession';
 import { AudioRecorder, AudioStreamer } from '../lib/audio';
 import { listKnowledgeFiles, fetchKnowledgeFileContent } from '../lib/supabaseStorage';
+import { usePersistedUserSetting } from '../lib/usePersistedUserSetting';
 import { Loader2, Mic, Square, Check, Settings, X, Save, Video, MessageSquare, Monitor, ChevronDown, Moon, Sun, Mail, Calendar, ListChecks, HardDrive, Users, FileText, MapPin, Building2, Shield, Calculator, Languages, Heart, Scale, Train, Globe, FileOutput, Network, Zap, Search, GitBranch, Cpu, Fingerprint, Terminal } from 'lucide-react';
 import { ToggleSwitch } from './ToggleSwitch';
 import { AnimatePresence, motion } from 'motion/react';
@@ -984,7 +985,7 @@ export function BeatriceAgent({
   setGoogleToken: (token: string | null) => void;
   storeToken: (token: string, uid: string, refreshToken?: string) => void;
   authLanguage: string;
-  onSetLanguage: (lang: string) => void;
+  onSetLanguage: (lang: string, opts?: { skipSync?: boolean }) => void;
   onLogout: () => void;
   onLogin: () => void;
   theme: 'dark' | 'light';
@@ -1025,20 +1026,25 @@ export function BeatriceAgent({
     callId: string;
   } | null>(null);
   const [pendingRefineRequest, setPendingRefineRequest] = useState<string | null>(null);
-  const [personaName, setPersonaName] = useState("Beatrice");
-  const [customPrompt, setCustomPrompt] = useState("");
-  const [selectedVoice, setSelectedVoice] = useState("Aoede");
-  const [contextSize, setContextSize] = useState(20);
-  const [userTitle, setUserTitle] = useState(() => {
+  // ── Auto-persisted user-editable settings. Every change writes
+  //    synchronously to localStorage (offline / close-survival) AND
+  //    fire-and-forget debounced upsert to supabase `user_settings`
+  //    (cross-device continuity). The hook handles all writes; callers
+  //    just use these like normal useState setters.
+  const [personaName, setPersonaName] = usePersistedUserSetting('persona_name', user?.uid ?? null, "Beatrice");
+  const [customPrompt, setCustomPrompt] = usePersistedUserSetting('custom_prompt', user?.uid ?? null, "");
+  const [selectedVoice, setSelectedVoice] = usePersistedUserSetting('selected_voice', user?.uid ?? null, "Aoede");
+  const [contextSize, setContextSize] = usePersistedUserSetting('context_size', user?.uid ?? null, 20);
+  const [userTitle, setUserTitle] = usePersistedUserSetting('user_title', user?.uid ?? null, () => {
     try { return localStorage.getItem('beatrice_userTitle') || 'Boss'; } catch { return 'Boss'; }
   });
-  const [censorshipEnabled, setCensorshipEnabled] = useState(() => {
+  const [censorshipEnabled, setCensorshipEnabled] = usePersistedUserSetting('censorship_enabled', user?.uid ?? null, () => {
     try { return localStorage.getItem('beatrice_censorship') !== 'false'; } catch { return true; }
   });
-  const [ambientEnabled, setAmbientEnabled] = useState(() => {
+  const [ambientEnabled, setAmbientEnabled] = usePersistedUserSetting('ambient_enabled', user?.uid ?? null, () => {
     try { return localStorage.getItem('beatrice_ambient_enabled') !== 'false'; } catch { return true; }
   });
-  const [ambientVolume, setAmbientVolume] = useState(() => {
+  const [ambientVolume, setAmbientVolume] = usePersistedUserSetting('ambient_volume', user?.uid ?? null, () => {
     try {
       const saved = Number(localStorage.getItem('beatrice_ambient_volume'));
       return Number.isFinite(saved) && saved >= 0 ? saved : DEFAULT_AMBIENT_VOLUME;
@@ -1051,8 +1057,8 @@ export function BeatriceAgent({
   useEffect(() => {
     if (firstName && !localStorage.getItem('beatrice_userTitle')) {
       const defaultAddr = `Boss ${firstName}`;
+      // Hook's setter writes localStorage and Supabase for us.
       setUserTitle(defaultAddr);
-      try { localStorage.setItem('beatrice_userTitle', defaultAddr); } catch {}
     }
   }, [firstName]);
 
@@ -2482,18 +2488,23 @@ const backendUrl = getEnv('VITE_BACKEND_URL') || (await import('../lib/whatsappC
         .maybeSingle();
 
       if (!settingsError && settingsData) {
-        if (settingsData.persona_name) setPersonaName(settingsData.persona_name);
-        if (settingsData.custom_prompt !== null) setCustomPrompt(settingsData.custom_prompt);
-        if (settingsData.selected_voice) setSelectedVoice(settingsData.selected_voice);
-        if (settingsData.context_size !== undefined) setContextSize(settingsData.context_size);
-        if (settingsData.user_title) { setUserTitle(settingsData.user_title); try { localStorage.setItem('beatrice_userTitle', settingsData.user_title); } catch {} }
-        if (settingsData.language) { onSetLanguage(settingsData.language); try { localStorage.setItem('beatrice_language', settingsData.language); } catch {} }
+        // Hydration from Supabase — pass { skipSync: true } so the hook
+        // doesn't re-queue the same value it just pulled from us into the
+        // debounced upsert. localStorage is mirrored automatically by the
+        // hook itself, so the old inline `try { localStorage.setItem(...) }`
+        // calls were redundant.
+        if (settingsData.persona_name) setPersonaName(settingsData.persona_name, { skipSync: true });
+        if (settingsData.custom_prompt !== null) setCustomPrompt(settingsData.custom_prompt, { skipSync: true });
+        if (settingsData.selected_voice) setSelectedVoice(settingsData.selected_voice, { skipSync: true });
+        if (settingsData.context_size !== undefined) setContextSize(settingsData.context_size, { skipSync: true });
+        if (settingsData.user_title) setUserTitle(settingsData.user_title, { skipSync: true });
+        if (settingsData.language) onSetLanguage(settingsData.language, { skipSync: true });
         if (settingsData.whatsapp_permissions) setWaPermissions(prev => ({ ...prev, ...settingsData.whatsapp_permissions }));
         if (settingsData.whatsapp_phone) setWaPhone(settingsData.whatsapp_phone);
-        if (settingsData.theme) { try { localStorage.setItem('beatrice_theme', settingsData.theme); if (settingsData.theme !== theme) onToggleTheme(); } catch {} }
-        if (settingsData.ambient_enabled !== undefined) { setAmbientEnabled(settingsData.ambient_enabled); try { localStorage.setItem('beatrice_ambient_enabled', String(settingsData.ambient_enabled)); } catch {} }
-        if (settingsData.ambient_volume !== undefined) { setAmbientVolume(settingsData.ambient_volume); try { localStorage.setItem('beatrice_ambient_volume', String(settingsData.ambient_volume)); } catch {} }
-        if (settingsData.censorship_enabled !== undefined) { setCensorshipEnabled(settingsData.censorship_enabled); try { localStorage.setItem('beatrice_censorship', String(settingsData.censorship_enabled)); } catch {} }
+        if (settingsData.theme && settingsData.theme !== theme) onToggleTheme();
+        if (settingsData.ambient_enabled !== undefined) setAmbientEnabled(settingsData.ambient_enabled, { skipSync: true });
+        if (settingsData.ambient_volume !== undefined) setAmbientVolume(settingsData.ambient_volume, { skipSync: true });
+        if (settingsData.censorship_enabled !== undefined) setCensorshipEnabled(settingsData.censorship_enabled, { skipSync: true });
       }
 
       const settingsChannel = supabase
@@ -2501,18 +2512,21 @@ const backendUrl = getEnv('VITE_BACKEND_URL') || (await import('../lib/whatsappC
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_settings', filter: `user_id=eq.${user.uid}` }, (payload) => {
           const s = payload.new as any;
           if (!s) return;
-          if (s.persona_name) setPersonaName(s.persona_name);
-          if (s.custom_prompt !== null) setCustomPrompt(s.custom_prompt);
-          if (s.selected_voice) setSelectedVoice(s.selected_voice);
-          if (s.context_size !== undefined) setContextSize(s.context_size);
-          if (s.user_title) { setUserTitle(s.user_title); try { localStorage.setItem('beatrice_userTitle', s.user_title); } catch {} }
-          if (s.language) { onSetLanguage(s.language); try { localStorage.setItem('beatrice_language', s.language); } catch {} }
+          // Realtime UPDATE from another device — same skipSync reasoning
+          // as the initial hydration above. Without `skipSync: true` we'd
+          // echo the incoming change back into Supabase as a no-op upsert.
+          if (s.persona_name) setPersonaName(s.persona_name, { skipSync: true });
+          if (s.custom_prompt !== null) setCustomPrompt(s.custom_prompt, { skipSync: true });
+          if (s.selected_voice) setSelectedVoice(s.selected_voice, { skipSync: true });
+          if (s.context_size !== undefined) setContextSize(s.context_size, { skipSync: true });
+          if (s.user_title) setUserTitle(s.user_title, { skipSync: true });
+          if (s.language) onSetLanguage(s.language, { skipSync: true });
           if (s.whatsapp_permissions) setWaPermissions(prev => ({ ...prev, ...s.whatsapp_permissions }));
           if (s.whatsapp_phone) setWaPhone(s.whatsapp_phone);
-          if (s.theme) { try { localStorage.setItem('beatrice_theme', s.theme); if (s.theme !== theme) onToggleTheme(); } catch {} }
-          if (s.ambient_enabled !== undefined) { setAmbientEnabled(s.ambient_enabled); try { localStorage.setItem('beatrice_ambient_enabled', String(s.ambient_enabled)); } catch {} }
-          if (s.ambient_volume !== undefined) { setAmbientVolume(s.ambient_volume); try { localStorage.setItem('beatrice_ambient_volume', String(s.ambient_volume)); } catch {} }
-          if (s.censorship_enabled !== undefined) { setCensorshipEnabled(s.censorship_enabled); try { localStorage.setItem('beatrice_censorship', String(s.censorship_enabled)); } catch {} }
+          if (s.theme && s.theme !== theme) onToggleTheme();
+          if (s.ambient_enabled !== undefined) setAmbientEnabled(s.ambient_enabled, { skipSync: true });
+          if (s.ambient_volume !== undefined) setAmbientVolume(s.ambient_volume, { skipSync: true });
+          if (s.censorship_enabled !== undefined) setCensorshipEnabled(s.censorship_enabled, { skipSync: true });
         })
         .subscribe();
 
@@ -2681,13 +2695,12 @@ const backendUrl = getEnv('VITE_BACKEND_URL') || (await import('../lib/whatsappC
           updated_at: new Date().toISOString(),
         });
 
-      try { localStorage.setItem('beatrice_userTitle', userTitle); } catch {}
-      try { localStorage.setItem('beatrice_language', authLanguage); } catch {}
-      try { localStorage.setItem('beatrice_theme', theme); } catch {}
-      try { localStorage.setItem('beatrice_ambient_enabled', String(ambientEnabled)); } catch {}
-      try { localStorage.setItem('beatrice_ambient_volume', String(ambientVolume)); } catch {}
-      try { localStorage.setItem('beatrice_censorship', String(censorshipEnabled)); } catch {}
-      
+      // The six `try { localStorage.setItem(...) } catch {}` writes that
+      // used to live here are now redundant — every setter above
+      // (usePersistedUserSetting) writes its own LS key synchronously on
+      // every change, so by the time this session-rebuild block runs the
+      // localStorage is already in sync with the React state.
+
       // Notify live session of persona/title/language changes in real-time
       if (sessionRef.current && isActive) {
         const updates = [];
@@ -5077,8 +5090,12 @@ ${historyContext}
                         const lang = String(args.language || '').trim();
                         if (!lang) { result = { error: 'Language code required' }; }
                         else {
-                          onSetLanguage(lang);
-                          try { localStorage.setItem('beatrice_language', lang); } catch {}
+                          onSetLanguage(lang, { skipSync: true });
+                          // localStorage write removed: usePersistedUserSetting in App.tsx
+                          // (behind onSetLanguage → setAuthLanguage) writes localStorage synchronously
+                          // and queues a debounced Supabase upsert. We pass { skipSync: true } so the
+                          // explicit supabase.upsert immediately below is the authoritative write.
+
                           await supabase.from('user_settings').upsert({
                             user_id: user.uid,
                             language: lang,
