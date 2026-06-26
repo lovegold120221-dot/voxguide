@@ -20,6 +20,7 @@
  */
 
 import { execSync, spawn } from 'child_process';
+import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 
@@ -229,6 +230,9 @@ function runOpenCode(params: {
   workspacePath?: string;
   appUrl?: string;
   modelOverride?: string;
+  /** Optional emitter for streaming events */
+  emitter?: EventEmitter;
+  taskId?: string;
 }): Promise<CodingAgentResult> {
   return new Promise((resolve, reject) => {
     const prompt = buildPrompt(params);
@@ -259,8 +263,27 @@ function runOpenCode(params: {
       else stderr = clipped;
     };
 
-    child.stdout.on('data', chunk => append('stdout', chunk));
-    child.stderr.on('data', chunk => append('stderr', chunk));
+    child.stdout.on('data', chunk => {
+      const text = chunk.toString('utf8');
+      append('stdout', chunk);
+      if (params.emitter && params.taskId) {
+        params.emitter.emit(`task:${params.taskId}:stdout`, text);
+        for (const line of text.split('\n')) {
+          const m = line.match(/wrote\s+(.+)|written\s+(?:to\s+)?(.+)|creating\s+(.+)|saved\s+(.+)/i);
+          if (m) {
+            const fp = m[1] || m[2] || m[3] || m[4];
+            if (fp) params.emitter!.emit(`task:${params.taskId}:file_written`, fp.trim());
+          }
+        }
+      }
+    });
+    child.stderr.on('data', chunk => {
+      const text = chunk.toString('utf8');
+      append('stderr', chunk);
+      if (params.emitter && params.taskId) {
+        params.emitter.emit(`task:${params.taskId}:stderr`, text);
+      }
+    });
 
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -288,6 +311,8 @@ function runOpenCode(params: {
     });
   });
 }
+
+
 
 function runGeminiCLI(params: {
   task: string;
@@ -523,7 +548,7 @@ async function runCerebrasFallback(
 
 // ── Main runner ─────────────────────────────────────────────────
 
-export class CodingAgentRunner {
+export class CodingAgentRunner extends EventEmitter {
   readonly defaultProvider: CodingAgentProvider = DEFAULT_PROVIDER;
   private allowedRoot: string;
   private callOllama: (model: string, system: string, prompt: string, timeout: number, maxTokens: number) => Promise<{ content: string }>;
@@ -534,6 +559,7 @@ export class CodingAgentRunner {
     callOllama: (model: string, system: string, prompt: string, timeout: number, maxTokens: number) => Promise<{ content: string }>;
     callCerebras: (system: string, prompt: string, timeout: number, maxTokens: number) => Promise<{ content: string }>;
   }) {
+    super();
     this.allowedRoot = opts.allowedRoot;
     this.callOllama = opts.callOllama;
     this.callCerebras = opts.callCerebras;
@@ -625,6 +651,151 @@ export class CodingAgentRunner {
 
     // Unknown provider — fall back to OpenCode
     return this.runWithOpenCodeFallback(commonParams);
+  }
+
+  /**
+   * startStreamTask — fire-and-forget streaming execution.
+   * Emits events on `this` EventEmitter under namespaced keys:
+   *   `task:<taskId>:stdout`      → raw stdout chunk (string)
+   *   `task:<taskId>:stderr`      → raw stderr chunk (string)
+   *   `task:<taskId>:file_written`→ detected file path (string)
+   *   `task:<taskId>:complete`   → final CodingAgentResult
+   *
+   * The caller (server/index.ts SSE endpoint) subscribes to these events
+   * and pushes them to the connected client.
+   */
+  startStreamTask(req: CodingAgentRequest, taskId: string): void {
+    const safeTimeout = Math.min(Math.max(Number(req.timeout) || 60, 10), 300);
+    const safePrompt = String(req.taskPrompt || '').trim();
+    if (!safePrompt) {
+      this.emit(`task:${taskId}:complete`, {
+        ok: false, stdout: '', stderr: '', exitCode: null,
+        timedOut: false, truncated: false,
+        error: 'The workspace assistant could not complete the task.',
+      });
+      return;
+    }
+
+    const cwd = path.resolve(req.cwd || this.allowedRoot);
+    const scopeCheck = validateWorkspaceScope(cwd, this.allowedRoot);
+    if (!scopeCheck.valid) {
+      this.emit(`task:${taskId}:complete`, {
+        ok: false, stdout: '', stderr: '', exitCode: null,
+        timedOut: false, truncated: false,
+        error: 'The workspace assistant could not complete the task.',
+      });
+      return;
+    }
+
+    // Run the fallback chain asynchronously, streaming events via `this` emitter
+    this.runStreamChain(taskId, safePrompt, req.skill, safeTimeout, cwd, req);
+  }
+
+  /**
+   * Asynchronous fallback chain for streaming — tries each model in the Zen chain
+   * with streaming events, then falls back to Cerebras/Ollama.
+   */
+  private async runStreamChain(
+    taskId: string,
+    prompt: string,
+    skill: string | undefined,
+    timeout: number,
+    cwd: string,
+    req: CodingAgentRequest,
+  ): Promise<void> {
+    const chain = OPENCODE_ZEN_CHAIN.length > 0 ? OPENCODE_ZEN_CHAIN : [OPENCODE_MODEL];
+    const appName = req.appName;
+    const workspacePath = req.workspacePath;
+    const appUrl = req.appUrl;
+    let lastResult: CodingAgentResult | null = null;
+    const triedModels: string[] = [];
+    const emit = (event: string, data: any) => this.emit(`task:${taskId}:${event}`, data);
+
+    emit('stdout', `\n[Starting task...]\n`);
+
+    for (let i = 0; i < chain.length; i++) {
+      const model = chain[i];
+      triedModels.push(model);
+      const perModelTimeout = sliceTimeoutPerModel(timeout, chain.length - i);
+
+      emit('stdout', `\n[Using model: ${model}]\n`);
+
+      try {
+        const result = await runOpenCode({
+          task: prompt,
+          skill,
+          timeout: perModelTimeout,
+          cwd,
+          appName,
+          workspacePath,
+          appUrl,
+          modelOverride: model,
+          emitter: this,
+          taskId,
+        });
+
+        if (result.ok) {
+          emit('stdout', `\n[Task complete]\n`);
+          emit('complete', result);
+          return;
+        }
+
+        lastResult = result;
+
+        if (!isQuotaError(result.stderr, result.stdout)) {
+          // Non-quota error — don't retry with other models
+          break;
+        }
+
+        emit('stdout', `\n[Model quota exhausted, trying next model...]\n`);
+        console.warn(`[CodingAgent] Model ${model} exhausted — swapping to next.`);
+      } catch (err: any) {
+        console.warn(`[CodingAgent] Model ${model} failed: ${err.message?.slice(0, 100)}`);
+        lastResult = {
+          ok: false, stdout: '', stderr: String(err.message || ''), exitCode: null,
+          timedOut: false, truncated: false,
+          error: 'The workspace assistant could not complete the task.',
+          _provider: 'opencode', _model: model,
+        };
+        break;
+      }
+    }
+
+    // Cerebras fallback
+    emit('stdout', `\n[Trying Cerebras fallback...]\n`);
+    const cerebrasResult = await runCerebrasFallback(
+      { taskPrompt: prompt, skill, timeout, cwd, appName, workspacePath, appUrl },
+      lastResult ?? {
+        ok: false, stdout: '', stderr: '', exitCode: null,
+        timedOut: false, truncated: false, error: 'No model was attempted.',
+      },
+      this.callCerebras,
+    );
+    if (cerebrasResult.ok) {
+      emit('stdout', `\n[Task complete]\n`);
+      emit('complete', cerebrasResult);
+      return;
+    }
+
+    // Ollama fallback
+    emit('stdout', `\n[Trying Ollama fallback...]\n`);
+    const ollamaResult = await runOllamaFallback(
+      { taskPrompt: prompt, skill, timeout, cwd, appName, workspacePath, appUrl },
+      cerebrasResult,
+      this.callOllama,
+    );
+    if (ollamaResult.ok) {
+      emit('stdout', `\n[Task complete]\n`);
+      emit('complete', ollamaResult);
+      return;
+    }
+
+    // Everything failed
+    console.warn(`[CodingAgent] All streaming providers exhausted. Tried: ${triedModels.join(', ')}`);
+    emit('complete', {
+      ...ollamaResult,
+      error: 'The workspace assistant could not complete the task.',
+    });
   }
 
   /** OpenCode provider with Zen model swap chain + Cerebras + Ollama fallback. */

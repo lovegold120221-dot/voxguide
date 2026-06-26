@@ -49,8 +49,20 @@
       "category": "public.app-category.productivity",
       "icon": "public/icon-eburon.svg",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "artifactName": "Beatrice-${version}-mac-${arch}.${ext}"
     },
@@ -58,15 +70,30 @@
       "category": "Office",
       "icon": "public/icon-eburon.svg",
       "target": [
-        { "target": "deb", "arch": ["x64"] },
-        { "target": "AppImage", "arch": ["x64"] }
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "artifactName": "Beatrice-${version}-linux-${arch}.${ext}"
     },
     "win": {
       "icon": "public/icon-eburon.svg",
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "artifactName": "Beatrice-${version}-win-${arch}.${ext}"
     }
@@ -75,10 +102,13 @@
     "@google/genai": "^1.29.0",
     "@hapi/boom": "^10.0.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@monaco-editor/react": "^4.7.0",
     "@supabase/supabase-js": "^2.106.2",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "cors": "^2.8.6",
     "dexie": "^4.4.3",
     "dexie-react-hooks": "^4.4.0",

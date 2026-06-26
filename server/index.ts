@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import { EventEmitter } from 'events';
 import { fileURLToPath } from 'url';
 
 import {
@@ -1394,6 +1395,169 @@ app.post('/api/coding-agent/run', async (req, res) => {
  */
 app.get('/api/coding-agent/status', (_req, res) => {
   res.json(codingAgentRunner.status());
+});
+
+// ── Streaming coding agent task manager ─────────────────────────
+// In-memory task registry (ephemeral — lost on server restart)
+const codingStreamEmitter = new EventEmitter();
+const codingStreamTasks = new Map<string, {
+  status: 'running' | 'complete' | 'error';
+  createdAt: number;
+  stdout: string;
+  stderr: string;
+  result?: any;
+  appUrl?: string;
+  appWorkspace?: string;
+}>();
+
+// Cleanup stale tasks every 5 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [id, task] of codingStreamTasks) {
+    if (task.createdAt < cutoff) codingStreamTasks.delete(id);
+  }
+}, 300_000).unref();
+
+/**
+ * POST /api/coding-agent/start
+ * Kick off an async coding task. Returns a taskId immediately.
+ * The frontend connects to GET /api/coding-agent/stream/:taskId for SSE events.
+ */
+app.post('/api/coding-agent/start', (req, res) => {
+  const { userId, taskPrompt, appName, skill, timeout, cwd } = req.body || {};
+  const safeTask = String(taskPrompt || '').trim();
+  if (!safeTask) {
+    res.status(400).json({ ok: false, error: 'task is required' });
+    return;
+  }
+
+  const safeAppName = String(appName || '').trim();
+  const safeUserId = String(userId || '').trim();
+  const taskId = crypto.randomUUID();
+  const workspacePath = safeAppName && safeUserId ? buildWorkspacePath(safeUserId, safeAppName) : undefined;
+  const appUrl = safeAppName && safeUserId ? buildAppUrl(safeUserId, safeAppName) : undefined;
+
+  codingStreamTasks.set(taskId, {
+    status: 'running',
+    createdAt: Date.now(),
+    stdout: '',
+    stderr: '',
+    appUrl,
+    appWorkspace: workspacePath,
+  });
+
+  res.json({ ok: true, taskId, appUrl, appWorkspace: workspacePath });
+
+  // Subscribe to streaming events
+  const onStdout = (text: string) => {
+    const task = codingStreamTasks.get(taskId);
+    if (task) task.stdout += text;
+  };
+  const onStderr = (text: string) => {
+    const task = codingStreamTasks.get(taskId);
+    if (task) task.stderr += text;
+  };
+  const onComplete = (result: any) => {
+    const task = codingStreamTasks.get(taskId);
+    if (task) { task.status = 'complete'; task.result = result; }
+    codingStreamEmitter.removeListener(eventStdout, onStdout);
+    codingStreamEmitter.removeListener(eventStderr, onStderr);
+    codingStreamEmitter.removeListener(eventComplete, onComplete);
+  };
+  const eventStdout = `task:${taskId}:stdout`;
+  const eventStderr = `task:${taskId}:stderr`;
+  const eventComplete = `task:${taskId}:complete`;
+  codingStreamEmitter.on(eventStdout, onStdout);
+  codingStreamEmitter.on(eventStderr, onStderr);
+  codingStreamEmitter.on(eventComplete, onComplete);
+
+  // Fire the streaming runner (async, returns immediately)
+  codingAgentRunner.startStreamTask({
+    taskPrompt: safeTask,
+    cwd: cwd || OPEN_TERMINAL_WORKDIR,
+    timeout,
+    appName: safeAppName || undefined,
+    workspacePath,
+    appUrl,
+    skill,
+  }, taskId);
+});
+
+/**
+ * GET /api/coding-agent/stream/:taskId
+ * SSE endpoint — streams stdout/stderr/complete events for a running task.
+ */
+app.get('/api/coding-agent/stream/:taskId', (req, res) => {
+  const taskId = req.params.taskId;
+  const task = codingStreamTasks.get(taskId);
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+
+  // Send initial state (any buffered output)
+  if (task.stdout) {
+    res.write(`data: ${JSON.stringify({ type: 'stdout', text: task.stdout })}\n\n`);
+  }
+  if (task.stderr) {
+    res.write(`data: ${JSON.stringify({ type: 'stderr', text: task.stderr })}\n\n`);
+  }
+  if (task.status === 'complete') {
+    res.write(`data: ${JSON.stringify({ type: 'complete', result: task.result })}\n\n`);
+    res.end();
+    return;
+  }
+
+  const onStdout = (text: string) => {
+    res.write(`data: ${JSON.stringify({ type: 'stdout', text })}\n\n`);
+  };
+  const onStderr = (text: string) => {
+    res.write(`data: ${JSON.stringify({ type: 'stderr', text })}\n\n`);
+  };
+  const onFileWritten = (filePath: string) => {
+    res.write(`data: ${JSON.stringify({ type: 'file_written', path: filePath })}\n\n`);
+  };
+  const onComplete = (result: any) => {
+      const { _provider, _model, ...safe } = result;
+      safe.appUrl = task.appUrl;
+      safe.appWorkspace = task.appWorkspace;
+      // Check if the workspace file actually exists
+      if (task.appWorkspace && safe.appUrl) {
+        const indexPath = path.join(task.appWorkspace, 'index.html');
+        if (!fs.existsSync(indexPath)) safe.appUrl = undefined;
+      }
+      res.write(`data: ${JSON.stringify({ type: 'complete', result: safe })}\n\n`);
+    res.end();
+    cleanup();
+  };
+
+  const cleanup = () => {
+    codingStreamEmitter.removeListener(`task:${taskId}:stdout`, onStdout);
+    codingStreamEmitter.removeListener(`task:${taskId}:stderr`, onStderr);
+    codingStreamEmitter.removeListener(`task:${taskId}:file_written`, onFileWritten);
+    codingStreamEmitter.removeListener(`task:${taskId}:complete`, onComplete);
+  };
+
+  codingStreamEmitter.on(`task:${taskId}:stdout`, onStdout);
+  codingStreamEmitter.on(`task:${taskId}:stderr`, onStderr);
+  codingStreamEmitter.on(`task:${taskId}:file_written`, onFileWritten);
+  codingStreamEmitter.on(`task:${taskId}:complete`, onComplete);
+
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+
+  // Heartbeat every 15s to keep connection alive
+  const heartbeat = setInterval(() => {
+    try { res.write(':heartbeat\n\n'); } catch { clearInterval(heartbeat); cleanup(); }
+  }, 15_000);
+  req.on('close', () => clearInterval(heartbeat));
 });
 
 async function callOllama(model: string, systemPrompt: string, userPrompt: string, timeoutSec: number, maxTokens = 256): Promise<{ content: string; model: string }> {

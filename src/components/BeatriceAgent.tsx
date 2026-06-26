@@ -13,6 +13,7 @@ import { saveOutput, uploadToDrive } from '../lib/workspace';
 import { ChatPage } from './ChatPage';
 import { VideoPage } from './VideoPage';
 import { DocumentViewer } from './DocumentViewer';
+import { LiveCodingPreview } from './LiveCodingPreview';
 import { ProfilePage } from './ProfilePage';
 import { WhatsAppSettings } from './WhatsAppSettings';
 import { startWhatsAppPairing, getWhatsAppStatus, disconnectWhatsApp, getBackendUrl } from '../lib/whatsappClient';
@@ -1015,6 +1016,11 @@ export function BeatriceAgent({
   const [showSettings, setShowSettings] = useState(false);
   const [showDocumentViewer, setShowDocumentViewer] = useState(false);
   const [activeDocument, setActiveDocument] = useState<{ title: string, content: string, fileType: string, url?: string } | null>(null);
+  const [streamingTask, setStreamingTask] = useState<{
+    taskId: string;
+    appUrl?: string;
+    appName?: string;
+  } | null>(null);
   const [pendingWhatsAppMessage, setPendingWhatsAppMessage] = useState<{
     to: string;
     name: string;
@@ -5001,8 +5007,13 @@ ${historyContext}
                       }
                     } else if (callName === 'open_terminal_skills') {
                       const args = call.args as any;
+                      const taskName = args.appName || (args.task ? args.task.slice(0, 60) : 'Generated App');
+
+                      // SSE-only flow: start streaming task, wait for SSE complete event
+                      let streamTaskId: string | undefined;
+                      let streamAppUrl: string | undefined;
                       try {
-                        const resp = await fetch('/api/coding-agent/run', {
+                        const startResp = await fetch('/api/coding-agent/start', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({
@@ -5011,55 +5022,87 @@ ${historyContext}
                             appName: args.appName || '',
                             skill: args.skill || '',
                             timeout: args.timeout || 60,
-                            agent: args.agent || undefined,
-                            model: args.model || undefined,
                           }),
                         });
-                        const data = await resp.json();
-                        if (!resp.ok) throw new Error(data.error || `Workspace assistant error (${resp.status})`);
-                        result = {
-                          ok: !!data.ok,
-                          command: data.command || '',
-                          cwd: data.cwd,
-                          stdout: data.stdout || '',
-                          stderr: data.stderr || '',
-                          exitCode: data.exitCode,
-                          timedOut: !!data.timedOut,
-                          truncated: !!data.truncated,
-                          error: data.error,
-                          appUrl: data.appUrl || '',
-                          appWorkspace: data.appWorkspace || '',
-                        };
-                        if (data.appUrl) {
-                          const appTitle = args.appName || (args.task ? args.task.slice(0, 60) : 'Generated App');
-                          const aWsOutput = {
-                            id: `app_${crypto.randomUUID()}`,
-                            userId: user.uid,
-                            type: 'app' as const,
-                            title: appTitle,
-                            textContent: data.appUrl,
-                            mimeType: 'text/html',
-                            fileSize: data.appUrl.length,
-                            createdAt: new Date().toISOString(),
-                          };
-                          saveOutput(aWsOutput).catch(() => {});
-                          syncWorkspaceToServer(aWsOutput);
-                          if (googleTokenRef.current) {
-                            const redirectHtml = `<html><head><meta http-equiv="refresh" content="0;url=${data.appUrl}"></head><body><p><a href="${data.appUrl}">Open app</a></p></body></html>`;
-                            uploadToDrive(gFetch, {
-                              ...aWsOutput,
-                              textContent: redirectHtml,
-                              mimeType: 'text/html',
-                              fileSize: redirectHtml.length,
-                            }).then(driveResult => {
-                              if (driveResult) {
-                                saveOutput({ ...aWsOutput, driveFileId: driveResult.fileId, driveLink: driveResult.link });
-                              }
-                            }).catch(() => {});
-                          }
+                        const startData = await startResp.json();
+                        if (startResp.ok && startData.taskId) {
+                          streamTaskId = startData.taskId;
+                          streamAppUrl = startData.appUrl;
+                          setStreamingTask({ taskId: startData.taskId, appUrl: startData.appUrl, appName: taskName });
+                        } else {
+                          throw new Error(startData.error || 'No task ID');
                         }
                       } catch (e: any) {
                         result = { ok: false, error: 'The workspace assistant could not complete the task.' };
+                        setStreamingTask(null);
+                        return result;
+                      }
+
+                      // Wait for SSE complete event
+                      const sseResult = await new Promise<any>((resolve) => {
+                        const es = new EventSource(`/api/coding-agent/stream/${streamTaskId}`);
+                        es.onmessage = (e: MessageEvent) => {
+                          if (e.data === ':heartbeat') return;
+                          try {
+                            const ev = JSON.parse(e.data);
+                            if (ev.type === 'complete') {
+                              es.close();
+                              resolve(ev.result);
+                            }
+                          } catch {}
+                        };
+                        es.onerror = () => {
+                          es.close();
+                          resolve({ ok: false, error: 'The workspace assistant could not complete the task.' });
+                        };
+                        // Fallback timeout
+                        setTimeout(() => {
+                          es.close();
+                          resolve({ ok: false, error: 'The workspace assistant could not complete the task.' });
+                        }, (args.timeout || 60) * 1000 + 15_000);
+                      });
+
+                      // Close streaming preview
+                      setStreamingTask(null);
+
+                      result = {
+                        ok: !!sseResult.ok,
+                        stdout: sseResult.stdout || '',
+                        stderr: '',
+                        exitCode: sseResult.exitCode ?? null,
+                        timedOut: !!sseResult.timedOut,
+                        truncated: !!sseResult.truncated,
+                        error: sseResult.ok ? undefined : 'The workspace assistant could not complete the task.',
+                        appUrl: sseResult.appUrl || streamAppUrl || '',
+                        appWorkspace: sseResult.appWorkspace || '',
+                      };
+
+                      if (result.appUrl && result.ok) {
+                        const aWsOutput = {
+                          id: `app_${crypto.randomUUID()}`,
+                          userId: user.uid,
+                          type: 'app' as const,
+                          title: taskName,
+                          textContent: result.appUrl,
+                          mimeType: 'text/html',
+                          fileSize: result.appUrl.length,
+                          createdAt: new Date().toISOString(),
+                        };
+                        saveOutput(aWsOutput).catch(() => {});
+                        syncWorkspaceToServer(aWsOutput);
+                        if (googleTokenRef.current) {
+                          const redirectHtml = `<html><head><meta http-equiv="refresh" content="0;url=${result.appUrl}"></head><body><p><a href="${result.appUrl}">Open app</a></p></body></html>`;
+                          uploadToDrive(gFetch, {
+                            ...aWsOutput,
+                            textContent: redirectHtml,
+                            mimeType: 'text/html',
+                            fileSize: redirectHtml.length,
+                          }).then(driveResult => {
+                            if (driveResult) {
+                              saveOutput({ ...aWsOutput, driveFileId: driveResult.fileId, driveLink: driveResult.link });
+                            }
+                          }).catch(() => {});
+                        }
                       }
                     } else if (callName === 'cerebras_browser_task') {
                       const args = call.args as any;
@@ -6761,6 +6804,14 @@ ${historyContext}
           />
         )}
       </AnimatePresence>
+
+      <LiveCodingPreview
+        visible={!!streamingTask}
+        taskId={streamingTask?.taskId || ''}
+        appUrl={streamingTask?.appUrl}
+        appName={streamingTask?.appName}
+        onClose={() => setStreamingTask(null)}
+      />
 
       <AnimatePresence>
         {pendingWhatsAppMessage && (
