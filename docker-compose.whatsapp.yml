@@ -19,7 +19,7 @@ services:
       OPEN_TERMINAL_FALLBACK_MODEL: media-pipe/eburon-sandbox-worker:latest
       OPEN_TERMINAL_WORKDIR: /app
       BEATRICE_WORKSPACE_DIR: /data/beatrice-workspace
-      BEATRICE_PUBLIC_URL: https://beatrice.eburon.ai
+      BEATRICE_PUBLIC_URL: https://whatsapp.eburon.ai
     network_mode: "host"
     volumes:
       - whatsapp_auth:/data/baileys

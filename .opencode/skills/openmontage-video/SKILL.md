@@ -244,7 +244,7 @@ Run:
 ```
 
 3. Stream per-stage progress to `DocumentViewer`. When the agent returns the
-   final URL `https://beatrice.eburon.ai/beatrice-workspace/<userId>/renders/sky-blue-60.mp4`,
+   final URL `https://whatsapp.eburon.ai/beatrice-workspace/<userId>/renders/sky-blue-60.mp4`,
    parent renders `<video>` with preload=none so the iframe stays responsive.
 4. Surface cost + duration + provider breakdown so the user sees what they paid
    for.

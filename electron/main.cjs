@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 
 const isDev = !app.isPackaged;
-const PROD_URL = 'https://beatrice.eburon.ai';
+const PROD_URL = 'https://whatsapp.eburon.ai';
 const HOME = homedir();
 const OS = osPlatform();
 

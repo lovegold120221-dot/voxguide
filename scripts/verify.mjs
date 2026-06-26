@@ -17,7 +17,7 @@
  *
  * Sample usage:
  *   npm run verify
- *   SMOKE_URL=https://beatrice.eburon.ai npm run verify
+ *   SMOKE_URL=https://whatsapp.eburon.ai npm run verify
  *   SMOKE_SKIP_INSTALL=1 npm run verify      # run smoke:skills-install without actually cloning
  *
  * Hardening notes:
