@@ -1,7 +1,7 @@
 import { onRequest } from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
 
-const BACKEND_TARGET = "http://168.231.78.113:4200";
+const BACKEND_TARGET = "http://168.231.78.113:4300";
 
 /**
  * Proxies /api/* requests to the WhatsApp backend server.
@@ -17,7 +17,7 @@ export const apiProxy = onRequest(
   },
   async (req, res) => {
     // Build the target URL: strip /api from the path prefix if it exists
-    // The backend at 168.231.78.113:4200 already has /api routes
+    // The backend at 168.231.78.113:4300 already has /api routes
     // We forward the full path including /api
     const targetPath = req.path; // e.g. /api/whatsapp/status/xyz
     const targetUrl = `${BACKEND_TARGET}${targetPath}`;

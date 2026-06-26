@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import http from 'http';
 
-const BASE_URL = process.env.SMOKE_URL || 'http://127.0.0.1:4200';
+const BASE_URL = process.env.SMOKE_URL || 'http://127.0.0.1:4300';
 
 async function check(endpoint) {
   return new Promise((resolve, reject) => {

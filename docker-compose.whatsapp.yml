@@ -3,11 +3,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.whatsapp
-    container_name: voxx-zero-whatsapp
+    container_name: beatrice-server
     env_file:
       - .env.whatsapp
     environment:
-      SANDBOX_PORT: "4200"
+      SANDBOX_PORT: "4300"
       WA_AUTH_ROOT: /data/baileys
       WA_LOG_LEVEL: ${WA_LOG_LEVEL:-silent}
       OLLAMA_BASE_URL: http://127.0.0.1:11434
@@ -19,7 +19,7 @@ services:
       OPEN_TERMINAL_FALLBACK_MODEL: media-pipe/eburon-sandbox-worker:latest
       OPEN_TERMINAL_WORKDIR: /app
       BEATRICE_WORKSPACE_DIR: /data/beatrice-workspace
-      BEATRICE_PUBLIC_URL: https://whatsapp.eburon.ai
+      BEATRICE_PUBLIC_URL: https://beatrice.eburon.ai
     network_mode: "host"
     volumes:
       - whatsapp_auth:/data/baileys
@@ -28,7 +28,7 @@ services:
       - wa_media:/data/wa-media
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4200/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4300/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 30s
       timeout: 5s
       retries: 3

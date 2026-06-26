@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "https://whatsapp.eburon.ai",
+      "url": "https://beatrice.eburon.ai",
       "description": "Eburon Backend (production)"
     },
     {

@@ -688,7 +688,7 @@ IMPORTANT: When you speak about ANY of this content, use "we", "us", "our", or "
 - When asked about Orbit Meeting features, explain it as Eburon's meeting product for breaking language barriers with real-time speech recognition, translation, AI voice synthesis, video conferencing, chat, recording, glossary, and meeting history.
 
 --- OUR OTHER EBURON APPS ---
-- **Beatrice** (https://whatsapp.eburon.ai) — This app! Our WhatsApp-integrated voice AI agent. Users talk to Beatrice through voice or WhatsApp chat. Features: real-time voice conversation, memory, WhatsApp integration (send/receive messages, manage contacts, groups), Belgian business tools (KBO lookup, VAT validation, Peppol e-invoicing, tax calculator, itsme guide, NMBS mobility), document/workspace generation, browser automation, knowledge base personalization, PWA installable.
+- **Beatrice** (https://beatrice.eburon.ai) — This app! Our WhatsApp-integrated voice AI agent. Users talk to Beatrice through voice or WhatsApp chat. Features: real-time voice conversation, memory, WhatsApp integration (send/receive messages, manage contacts, groups), Belgian business tools (KBO lookup, VAT validation, Peppol e-invoicing, tax calculator, itsme guide, NMBS mobility), document/workspace generation, browser automation, knowledge base personalization, PWA installable.
 - **Eburon Hub** — Master E's flagship project. A centralized platform for managing Eburon voice agents, models, deployments, API keys, usage analytics, and team access. The operational dashboard for the entire Eburon ecosystem.
 - **PersonaLive** — Master E's cross-platform live speech translation app built with Electron + React. Runs locally with WebGPU inference for real-time speech translation without cloud dependencies. Supports multiple languages with offline capability.
 - **Eburon Pro Vision** — Our specialized multimodal AI model for the Belgian public sector. Trilingual OCR for Dutch, French, and German. Handles official government documents, identity cards, permits, and forms with high accuracy.
@@ -743,8 +743,8 @@ const getEburonApiKey = async (): Promise<string> => {
   if (_eburonSessionInfo) return _eburonSessionInfo.token;
 
   try {
-    const backendUrl = getEnv('VITE_BACKEND_URL') || 'http://localhost:4200';
-    const res = await fetch(`${backendUrl}/api/eburon/live-session`, {
+    const backendUrl = getEnv('VITE_BACKEND_URL') || await import('../lib/whatsappClient').then(m => m.getBackendUrl());
+      const res = await fetch(`${backendUrl}/api/eburon/live-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ modelAlias: _VOICE_MODEL }),
@@ -1192,7 +1192,7 @@ export function BeatriceAgent({
       const cmd = 'xattr -d com.apple.quarantine ~/Downloads/beatrice-daemon.command 2>/dev/null; chmod +x ~/Downloads/beatrice-daemon.command; ~/Downloads/beatrice-daemon.command';
       try { await navigator.clipboard.writeText(cmd); } catch {}
       // Also download the file
-      const macScript = `#!/bin/bash\n\nif ! command -v node &> /dev/null; then\n  echo "Node.js is required. Installing via Homebrew..."\n  if command -v brew &> /dev/null; then brew install node 2>/dev/null; fi\n  if ! command -v node &> /dev/null; then\n    echo "Please install Node.js 22+ from https://nodejs.org"\n    read -p "Press Enter to close..."\n    exit 1\n  fi\nfi\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\necho "Starting Beatrice Local Daemon..."\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
+      const macScript = `#!/bin/bash\n\nif ! command -v node &> /dev/null; then\n  echo "Node.js is required. Installing via Homebrew..."\n  if command -v brew &> /dev/null; then brew install node 2>/dev/null; fi\n  if ! command -v node &> /dev/null; then\n    echo "Please install Node.js 22+ from https://nodejs.org"\n    read -p "Press Enter to close..."\n    exit 1\n  fi\nfi\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://beatrice.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\necho "Starting Beatrice Local Daemon..."\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
       const blob = new Blob([macScript], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -1212,8 +1212,8 @@ export function BeatriceAgent({
     const filename = `beatrice-daemon${ext}`;
 
     const script = isWin
-      ? `@echo off\ncd /d %USERPROFILE%\\Downloads\nif not exist beatrice-local-daemon.mjs (\n  curl -sS -o beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\n)\nnode beatrice-local-daemon.mjs\npause\n`
-      : `#!/usr/bin/env bash\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
+      ? `@echo off\ncd /d %USERPROFILE%\\Downloads\nif not exist beatrice-local-daemon.mjs (\n  curl -sS -o beatrice-local-daemon.mjs https://beatrice.eburon.ai/beatrice-local-daemon.mjs\n)\nnode beatrice-local-daemon.mjs\npause\n`
+      : `#!/usr/bin/env bash\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://beatrice.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
 
     const blob = new Blob([script], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
@@ -2065,7 +2065,7 @@ export function BeatriceAgent({
 
   const syncWorkspaceToServer = async (output: any) => {
     try {
-      const backendUrl = getEnv('VITE_BACKEND_URL') || 'http://localhost:4200';
+const backendUrl = getEnv('VITE_BACKEND_URL') || (await import('../lib/whatsappClient').then(m => m.getBackendUrl()));
       await fetch(`${backendUrl}/api/workspace/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3037,7 +3037,7 @@ I have a comprehensive set of skills at my disposal. Every task the user gives m
 - For 3D apps, games, and visualizations: use Three.js loaded from CDN
 - Generated apps are served live at a unique URL immediately
 - I can also run terminal commands, manage files, install packages, run git operations, and automate workflows
-- **App URL pattern:** https://whatsapp.eburon.ai/beatrice-workspace/{safe-user-id}/{appName}/
+- **App URL pattern:** https://beatrice.eburon.ai/beatrice-workspace/{safe-user-id}/{appName}/
 - Trigger: "build me an app", "create a website", "make a tool", "run this command", "write a script", "automate this"
 
 **LOCAL FILESYSTEM SKILLS** -- Browse, read, and write files on the user's local computer
@@ -3870,7 +3870,7 @@ ${historyContext}
                     type: Type.OBJECT,
                     properties: {
                       task: { type: Type.STRING, description: "Precise terminal task to perform. Include expected output or constraints. For app generation, include the full path where files should be saved." },
-                      appName: { type: Type.STRING, description: "Short URL-safe name for the generated app (e.g. 'todo-list', 'calculator'). Required when building apps. The app will be served live at https://whatsapp.eburon.ai/beatrice-workspace/{userId}/{appName}/." },
+                      appName: { type: Type.STRING, description: "Short URL-safe name for the generated app (e.g. 'todo-list', 'calculator'). Required when building apps. The app will be served live at https://beatrice.eburon.ai/beatrice-workspace/{userId}/{appName}/." },
                       skill: { type: Type.STRING, description: "Optional skill specialization to request." },
                       timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (10-300, default 60)." },
                       model: { type: Type.STRING, description: "OpenCode model to use (e.g. 'zenn-ai-large-free', 'deepseek-v4-flash-free'). Default: 'zenn-ai-large-free'. Use when you need to select a specific model instead of the default." }
@@ -4344,7 +4344,23 @@ ${historyContext}
                       type: Type.OBJECT,
                       properties: {}
                     }
-                  }
+                  },
+                  {
+                    name: "local_check_skill_caps",
+                    description: "Probe the capability envelope for installing an external skill pack. Currently supports slug='gstack' (full-sprint engineering workflow: Office Hours, CEO Review, Eng Review, Design Review, QA, Ship) and slug='openmontage-video' (agentic video production: 12 pipelines, Remotion or HyperFrames renderer, free archival footage corpus from Archive.org / NASA / Wikimedia). Returns which of git / opencode / python3 / ffmpeg / node are installed on the host so you can warn the user before installing. Call this before local_install_skill_pack.",
+                    parameters: { type: Type.OBJECT, properties: {} }
+                  },
+                  {
+                    name: "local_install_skill_pack",
+                    description: "Clone an allowlisted external skill pack onto the server's workspace root. Currently supports slug='gstack' (clone into BEATRICE_SKILLS_INSTALL_ROOT; user then runs `./setup --host opencode` to register the 23 specialist slash commands; pairs with local_run_opencode_task to dispatch /office-hours, /review, /qa, /cso, /investigate, etc.) and slug='openmontage-video' (clone the OpenMontage repository; user then runs `make setup`; pairs with local_run_opencode_task for pipeline execution). Always call local_check_skill_caps first so the user knows which host binaries are missing before the clone starts. Returns { ok, slug, repo, installPath, stdoutTail, durationMs, nextSteps }.",
+                    parameters: {
+                      type: Type.OBJECT,
+                      properties: {
+                        slug: { type: Type.STRING, description: "Which skill pack to install. Allowed: 'gstack' or 'openmontage-video'." }
+                      },
+                      required: ["slug"]
+                    }
+                  },
                ] as FunctionDeclaration[]
             }
           ],
@@ -5700,6 +5716,71 @@ ${historyContext}
                           result = { ok: false, error: e.message || 'Failed to set up workspace' };
                         }
                       }
+                    } else if (callName === 'local_check_skill_caps') {
+                      try {
+                        const resp = await fetch('/api/skills/caps', {
+                          method: 'GET',
+                          signal: AbortSignal.timeout(10_000),
+                        });
+                        const data = await resp.json();
+                        const installed = (data && data.installed) || {};
+                        const missing: string[] = Object.entries(installed)
+                          .filter(([_k, v]) => !v)
+                          .map(([k]) => k);
+                        result = {
+                          ok: data && data.ready === true,
+                          ready: data && data.ready === true,
+                          installRoot: data && data.installRoot,
+                          allowlist: data && data.allowlist,
+                          installed,
+                          missing,
+                          message: missing.length === 0
+                            ? 'Skill-pack installer is ready. Both gstack and openmontage-video are installable on this host.'
+                            : `Missing host binaries before skill-pack install: ${missing.join(', ')}. Ask the user to install them first.`,
+                        };
+                      } catch (e: any) {
+                        result = { ok: false, error: e.message || 'Failed to check skill caps' };
+                      }
+                    } else if (callName === 'local_install_skill_pack') {
+                      try {
+                        const slug = (call.args as any)?.slug;
+                        if (!slug) {
+                          result = { ok: false, error: 'slug is required (allowed: gstack, openmontage-video)' };
+                        } else {
+                          setTasks(prev => [...prev, { id: taskId, serviceName: 'Skill Pack Installer', action: `Cloning skill pack: ${slug}...`, status: 'processing' }]);
+                          const resp = await fetch('/api/skills/install', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ slug }),
+                            signal: AbortSignal.timeout(180_000),
+                          });
+                          const data = await resp.json();
+                          if (data && data.ok) {
+                            result = {
+                              ok: true,
+                              slug: data.slug,
+                              repo: data.repo,
+                              installPath: data.installPath,
+                              durationMs: data.durationMs,
+                              nextSteps: data.nextSteps,
+                              stdoutTail: data.stdoutTail,
+                              message: `Installed ${data.slug}. Next: ${data.nextSteps}`,
+                            };
+                          } else {
+                            result = {
+                              ok: false,
+                              slug,
+                              error: (data && data.error) || 'install failed',
+                              allowlist: data && data.allowlist,
+                            };
+                          }
+                          setTasks(prev => prev.filter(t => t.id !== taskId));
+                        }
+                      } catch (e: any) {
+                        setTasks(prev => prev.filter(t => t.id !== taskId));
+                        result = { ok: false, error: e.message || 'Failed to install skill pack' };
+                      }
+                    } else if (callName === 'server_read_file') {
                     } else if (callName === 'server_read_file') {
                       try {
                         const filePath = (call.args as any)?.path;

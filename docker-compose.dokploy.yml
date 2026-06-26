@@ -7,16 +7,16 @@ services:
     env_file:
       - .env
     environment:
-      SANDBOX_PORT: "4200"
+      SANDBOX_PORT: "4300"
       WA_AUTH_ROOT: /data/baileys
       WA_LOG_LEVEL: silent
     ports:
-      - "4200:4200"
+      - "4300:4300"
     volumes:
       - baileys_auth:/data/baileys
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4200/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4300/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -9,7 +9,7 @@ cat << 'BANNER'
 BANNER
 
 SANDBOX_ROOT="${SANDBOX_ROOT:-/var/eburon-ai/sandbox}"
-SANDBOX_PORT="${SANDBOX_PORT:-4200}"
+SANDBOX_PORT="${SANDBOX_PORT:-4300}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-hermes3:latest}"
 
 echo ""

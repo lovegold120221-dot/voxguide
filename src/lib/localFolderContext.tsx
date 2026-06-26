@@ -33,8 +33,10 @@ import {
   requestPermissionNow as libRequestPermission,
   setIgnorePatterns as libSetIgnorePatterns,
   scanAndSync as libScanAndSync,
-  type SyncCounters,
+  setAbsolutePath as libSetAbsolutePath,
+  setTerminalGrant as libSetTerminalGrant,
 } from './localFolder';
+import type { SyncCounters } from './localFolder';
 import type { UserLocalFolderState } from './kbSyncRegistry';
 import type { Capability } from './localFolder';
 
@@ -47,33 +49,61 @@ export type FolderStatus =
   | 'watching'
   | 'error';
 
+export interface FolderHandleView {
+  name: string;
+  pickedAt: number;
+  ignorePatterns: string[];
+  /** Absolute path returned by the daemon's native folder picker (may be null if user only used the browser picker) */
+  absolutePath?: string;
+  /** Did the user grant terminal access inside this folder? */
+  terminalGranted?: boolean;
+  /** Did the user grant whole-computer terminal access? */
+  wholeComputerGranted?: boolean;
+}
+
+export type LocalScope = 'selected_folder' | 'whole_computer';
+
+export interface LocalPermissionSnapshot {
+  selectedFolderPath?: string | null;
+  selectedFolderTerminal: boolean;
+  wholeComputerTerminal: boolean;
+  lastGrantAt?: number;
+}
+
 interface LocalFolderContextValue {
   capability: Capability;
   status: FolderStatus;
   errorMessage: string | null;
-  handle: { name: string; pickedAt: number; ignorePatterns: string[] } | null;
+  handle: FolderHandleView | null;
   lastScannedAt: number | null;
   pendingCount: number;
   counters: SyncCounters;
   errors: string[];
+  permissions: LocalPermissionSnapshot;
 
   pick: () => Promise<void>;
   reattach: () => Promise<void>;
   discard: () => Promise<void>;
   scanNow: () => Promise<void>;
   setIgnorePatterns: (patterns: string[]) => Promise<void>;
+
+  // ── NEW ── terminal + permission actions
+  setAbsolutePath: (absolutePath: string) => Promise<void>;
+  grantTerminalScope: (scope: LocalScope, granted: boolean) => Promise<void>;
+  recallPermissions: () => void;
 }
 
 interface InternalState {
   capability: Capability;
   status: FolderStatus;
   errorMessage: string | null;
-  handle: { name: string; pickedAt: number; ignorePatterns: string[] } | null;
+  handle: FolderHandleView | null;
   lastScannedAt: number | null;
   pendingCount: number;
   counters: SyncCounters;
   errors: string[];
   userId: string | null;
+  permissions: LocalPermissionSnapshot;
 }
 
 type Action =
@@ -107,6 +137,7 @@ const initial: InternalState = {
   counters: { ...EMPTY_COUNTERS },
   errors: [],
   userId: null,
+  permissions: { selectedFolderTerminal: false, wholeComputerTerminal: false },
 };
 
 function reducer(state: InternalState, action: Action): InternalState {
@@ -131,18 +162,30 @@ function reducer(state: InternalState, action: Action): InternalState {
     case 'no-user':
       return { ...initial, capability: state.capability };
     case 'set-state': {
-      const handleInfo = action.state
+      const handleInfo: FolderHandleView | null = action.state
         ? {
             name: action.state.handleName,
             pickedAt: action.state.pickedAt,
             ignorePatterns: action.state.ignorePatterns,
+            absolutePath: action.state.absolutePath,
+            terminalGranted: action.state.terminalGranted,
+            wholeComputerGranted: action.state.wholeComputerGranted,
           }
         : null;
+      const nextPermissions: LocalPermissionSnapshot = action.state
+        ? {
+            selectedFolderPath: action.state.absolutePath ?? null,
+            selectedFolderTerminal: !!action.state.terminalGranted,
+            wholeComputerTerminal: !!action.state.wholeComputerGranted,
+            lastGrantAt: action.state.lastGrantAt,
+          }
+        : { selectedFolderPath: null, selectedFolderTerminal: false, wholeComputerTerminal: false };
       return {
         ...state,
         handle: handleInfo,
         status: action.status,
         lastScannedAt: action.state?.lastScannedAt || state.lastScannedAt,
+        permissions: nextPermissions,
       };
     }
     case 'set-status':
@@ -266,6 +309,32 @@ export function LocalFolderProvider({
     if (updated) dispatch({ type: 'set-state', state: updated, status: 'watching' });
   }, [userId]);
 
+  const setAbsolutePath = useCallback(async (absolutePath: string) => {
+    if (!userId) return;
+    await libSetAbsolutePath(userId, absolutePath);
+    const updated = await loadStoredState(userId);
+    if (updated) dispatch({ type: 'set-state', state: updated, status: state.status });
+  }, [userId, state.status]);
+
+  const grantTerminalScope = useCallback(async (scope: LocalScope, granted: boolean) => {
+    if (!userId) return;
+    await libSetTerminalGrant(userId, scope === 'whole_computer'
+      ? { wholeComputer: granted }
+      : { folderTerminal: granted },
+    );
+    const updated = await loadStoredState(userId);
+    if (updated) dispatch({ type: 'set-state', state: updated, status: state.status });
+  }, [userId, state.status]);
+
+  // Re-load the stored permissions without performing any side-effect.
+  const recallPermissions = useCallback(() => {
+    if (!userId) return;
+    (async () => {
+      const updated = await loadStoredState(userId);
+      if (updated) dispatch({ type: 'set-state', state: updated, status: state.status });
+    })();
+  }, [userId, state.status]);
+
   const value: LocalFolderContextValue = useMemo(() => ({
     capability: state.capability,
     status: state.status,
@@ -275,12 +344,16 @@ export function LocalFolderProvider({
     pendingCount: state.pendingCount,
     counters: state.counters,
     errors: state.errors,
+    permissions: state.permissions,
     pick,
     reattach,
     discard,
     scanNow,
     setIgnorePatterns,
-  }), [state, pick, reattach, discard, scanNow, setIgnorePatterns]);
+    setAbsolutePath,
+    grantTerminalScope,
+    recallPermissions,
+  }), [state, pick, reattach, discard, scanNow, setIgnorePatterns, setAbsolutePath, grantTerminalScope, recallPermissions]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -298,11 +371,15 @@ export function useLocalFolder(): LocalFolderContextValue {
       pendingCount: 0,
       counters: { ...EMPTY_COUNTERS },
       errors: [],
+      permissions: { selectedFolderTerminal: false, wholeComputerTerminal: false },
       pick: async () => {},
       reattach: async () => {},
       discard: async () => {},
       scanNow: async () => {},
       setIgnorePatterns: async () => {},
+      setAbsolutePath: async () => {},
+      grantTerminalScope: async () => {},
+      recallPermissions: () => {},
     };
   }
   return ctx;

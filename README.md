@@ -227,6 +227,7 @@ Beatrice organizes her capabilities into skill categories, each with natural tri
 | **Document Creation** | "create a document", "draft a letter", "make a proposal" |
 | **Local Filesystem** | "my files", "local folder", "read this file", "save to my computer" |
 | **Local Terminal** | "run this command", "install opencode", "set up my workspace", "install ollama" |
+| **Skill Packs** | "install gstack", "set up the sprint workflow", "make me a video" — invokes `/api/skills/install` for [gstack](https://github.com/garrytan/gstack.git) or [openmontage-video](https://github.com/calesthio/OpenMontage.git) |
 
 ---
 
@@ -355,3 +356,53 @@ See `.env.example` for a complete template.
 Private Project — Eburon AI / Beatrice
 
 Built by [Eburon AI](https://eburon.ai) — founded by Jo Lernout.
+
+## Local Terminal & OpenCode/Ollama
+
+Beatrice bridges the browser File System Access API to the **real** machine path and shell through a Node 22+ daemon (`public/beatrice-local-daemon.mjs`), served at `/beatrice-local-daemon.mjs`. The daemon listens on `http://127.0.0.1:55420` (localhost is exempt from mixed-content blocking).
+
+### Bridge: browser picker -> real path
+
+`showDirectoryPicker` returns a `FileSystemDirectoryHandle` but does **not** expose the absolute macOS path. The daemon closes this gap with `/select-folder` (AppleScript on macOS, `zenity`/`kdialog` on Linux, PowerShell `FolderBrowserDialog` on Windows) returning `{ name, absolutePath, isDirectory, permissionScope: 'selected_folder' }`. Fallback: `POST /validate-path { path }` returns `{ exists, isDirectory, absolutePath, size }`.
+
+### Permissions
+
+Four levels: `none` < `selected_folder_readwrite` < `selected_folder_terminal` < `whole_computer_terminal`. Grants are persisted at `~/.beatrice/permissions.json`, keyed by userId, with an audit trail (`approvedAt`, `approvedByUser`).
+
+```
+POST /permissions/grant    { userId, selectedFolderPath?, selectedFolderTerminal?, wholeComputerTerminal? }
+POST /permissions/revoke   { userId, scope: 'selected_folder'|'whole_computer'|'all' }
+GET  /permissions?userId=...
+```
+
+### Safety classifier
+
+Four levels: `safe_readonly` / `safe_project_write` / `needs_confirmation` / `blocked`. The frontend mirrors the daemon's patterns in `src/lib/commandClassifier.ts` so the agent can ECHO confirmation cards; the daemon `public/beatrice-local-daemon.mjs` is the authoritative gate.
+
+`needs_confirmation` patterns: `rm` (non-root), `sudo`, `chmod -R`/`chown -R`, `git push --force`, `git reset --hard`, `git clean -fdx`, `diskutil`, `docker system prune`, `terraform apply|destroy`, `kubectl delete`, `DROP DATABASE|TABLE`, `DELETE FROM` w/o WHERE, `curl | bash|sh|zsh`, `vercel ... --prod`, `railway up`, `fly deploy`, `gcloud run deploy`, AWS destructive. Path-level gates: `~/.ssh`, keychains, `/Applications|/System|/Library`. Always-blocked: `rm -rf /`, fork-bomb, `chmod 777 /`, `mkfs`, `dd if=`.
+
+### OpenCode as the executing arm for webapps
+
+When the user asks for an "app", "webapp", "todo app with database", "site with backend", etc., Beatrice **delegates to OpenCode** running locally through the daemon — never just emits static HTML/CSS/JS. The engineered prompt (`src/lib/opencodePrompts.ts`) asks OpenCode to:
+
+1. Scaffold a backend (Express / Hono / FastAPI / stack-implied) with at minimum `GET /api/health` plus CRUD endpoints for the domain.
+2. Wire SQLite (`better-sqlite3` / `sqlite3` / `SQLAlchemy + SQLite`) as a zero-config first target; design migrations so the schema can swap to Postgres later.
+3. Wire the frontend to the backend (fetch + same-origin during dev, or a Vite proxy).
+4. Provide a single `npm run dev` (or compose) to run both.
+5. Run it, curl `/api/health`, and **report the actual response** so the user can verify "is this thing actually working?".
+
+```
+POST /opencode/run  { taskPrompt, cwd?, model?, scope: 'selected_folder'|'whole_computer', userId, timeout? }
+POST /tools/pull-ollama-model  { model }      # setup helper
+GET  /tools/status                              # full env: node/opencode/ollama/homebrew/git/pnpm/curl/python
+POST /tools/install-opencode                    # installs + configures Ollama primary + Zen fallback chain
+POST /tools/install-ollama                      # installs + starts
+```
+
+### Run-in-folder
+
+```
+POST /run  { command, cwd, timeout, scope: 'selected_folder'|'whole_computer', userId, confirm?, reason? }
+```
+
+Returns `{ ok, cwd, command, exitCode, stdout, stderr, durationMs, level }`. `needs_confirmation` is returned as `409` with `needsConfirmation: true`; re-send with `confirm: true` after the user clicks through.

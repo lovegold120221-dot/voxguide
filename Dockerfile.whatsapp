@@ -4,7 +4,7 @@ WORKDIR /app
 
 ENV PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    SANDBOX_PORT=4200 \
+    SANDBOX_PORT=4300 \
     WA_AUTH_ROOT=/data/baileys \
     WA_LOG_LEVEL=silent \
     PLAYWRIGHT_BROWSERS_PATH=/app/.venv/ms-playwright
@@ -37,6 +37,6 @@ COPY vite.config.ts ./
 
 USER node
 
-EXPOSE 4200
+EXPOSE 4300
 
 CMD ["dumb-init", "node_modules/.bin/tsx", "server/index.ts"]

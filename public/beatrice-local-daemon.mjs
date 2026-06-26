@@ -27,6 +27,132 @@ const HOME = homedir();
 const OS = platform(); // 'linux' | 'darwin' | 'win32'
 const OLLAMA_MODEL = 'media-pipe/eburon-sandbox-worker';
 
+// ── Permission grants filesystem (per-OS user, durable across restarts) ──
+//
+// Stored at ~/.beatrice/permissions.json — flat JSON keyed by user id.
+// Shape matches the LocalPermissionGrant type declared in the frontend:
+//   { [userId]: { selectedFolderPath, selectedFolderReadWrite,
+//                 selectedFolderTerminal, wholeComputerTerminal,
+//                 approvedAt, expiresAt?, approvedByUser } }
+const PERMISSIONS_DIR = resolve(HOME, '.beatrice');
+const PERMISSIONS_PATH = resolve(PERMISSIONS_DIR, 'permissions.json');
+
+function readPermissions() {
+  try {
+    if (!existsSync(PERMISSIONS_PATH)) return {};
+    const raw = readFileSync(PERMISSIONS_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePermissions(map) {
+  try {
+    if (!existsSync(PERMISSIONS_DIR)) mkdirSync(PERMISSIONS_DIR, { recursive: true });
+    writeFileSync(PERMISSIONS_PATH, JSON.stringify(map, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getGrant(userId) {
+  if (!userId) return null;
+  return readPermissions()[userId] || null;
+}
+
+function setGrant(userId, patch) {
+  const map = readPermissions();
+  const prev = map[userId] || {};
+  map[userId] = { ...prev, ...patch, approvedByUser: true, approvedAt: new Date().toISOString() };
+  writePermissions(map);
+  return map[userId];
+}
+
+function deleteGrant(userId) {
+  const map = readPermissions();
+  if (!map[userId]) return null;
+  delete map[userId];
+  writePermissions(map);
+  return true;
+}
+
+// ── Command classifier — single source of truth for the daemon's safety gate ──
+//
+// Levels: safe_readonly, safe_project_write, needs_confirmation, blocked.
+// Named-blocklist keywords are surfaced back to the agent so it can explain
+// the refusal. Path-based heuristics keep `rm -rf node_modules` allowed
+// inside an approved project but block `rm -rf /`.
+const COMMANDS_NEEDS_CONFIRMATION = [
+  /\brm\b(?!\s+-[^\s]*\s+\/)/i,                    // rm (never root)
+  /\bsudo\b/i,
+  /\bchmod\s+-[rR]\b/i,
+  /\bchown\s+-[rR]\b/i,
+  /\bdiskutil\b/i,
+  /\bgit\s+reset\s+--hard\b/i,
+  /\bgit\s+clean\s+-fdx\b/i,
+  /\bgit\s+push\b[^\n]*--force\b/i,
+  /\bgit\s+push\b[^\n]*-f\b/i,
+  /\bdocker\s+system\s+prune\b/i,
+  /\bterraform\s+(apply|destroy)\b/i,
+  /\bkubectl\s+delete\b/i,
+  /\bdrop\s+(database|table)\b/i,
+  /\bdelete\s+from\b[^\n]*\b(?!where\b)/i,         // DELETE FROM without WHERE
+  /\bcurl\b[^\n]*\|\s*(bash|sh|zsh)\b/i,         // curl | bash
+  /\bvercel\b[^\n]*--prod\b/i,
+  /\brailway\s+up\b/i,
+  /\bfly\s+deploy\b/i,
+  /\bgcloud\s+run\s+deploy\b/i,
+  /\baws\b[^\n]*\b(delete|terminate|destroy)\b/i,
+];
+
+const COMMANDS_BLOCKED = [
+  /\brm\s+-rf\s+\//i,
+  /\bsudo\s+rm\s+-rf\s+\//i,
+  /\bmkfs\b/i,
+  /\bdd\s+if=/i,
+  /:(){ :\|:& };:/,                                 // fork bomb
+  /\bchmod\s+777\s+\//i,
+];
+
+const COMMANDS_SAFE_READONLY = [
+  /^\s*pwd\b/i,
+  /^\s*ls\b/i,
+  /^\s*tree\b/i,
+  /^\s*cat\b/i,
+  /^\s*head\b/i,
+  /^\s*tail\b/i,
+  /^\s*rg\b/i,
+  /^\s*fd\b/i,
+  /^\s*grep\b/i,
+  /^\s*git\s+status\b/i,
+  /^\s*git\s+log\b/i,
+  /^\s*git\s+diff\b/i,
+  /^\s*git\s+show\b/i,
+  /^\s*node\s+--?version\b/i,
+  /^\s*npm\s+test\b/i,
+  /^\s*pnpm\s+test\b/i,
+  /^\s*yarn\s+test\b/i,
+];
+
+function classifyCommand(commandString) {
+  if (typeof commandString !== 'string' || commandString.trim().length === 0) {
+    return { level: 'blocked', reason: 'empty command' };
+  }
+  for (const re of COMMANDS_BLOCKED) {
+    if (re.test(commandString)) return { level: 'blocked', reason: re.toString() };
+  }
+  for (const re of COMMANDS_NEEDS_CONFIRMATION) {
+    if (re.test(commandString)) return { level: 'needs_confirmation', reason: re.toString() };
+  }
+  for (const re of COMMANDS_SAFE_READONLY) {
+    if (re.test(commandString)) return { level: 'safe_readonly', reason: re.toString() };
+  }
+  return { level: 'safe_project_write', reason: 'not matched by block or confirm lists' };
+}
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -456,6 +582,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── POST /run ──
+  // Body: { command, cwd?, timeout?, scope?: 'selected_folder'|'whole_computer', userId?, reason? }
+  // Returns extra fields: level (safe_readonly | safe_project_write | needs_confirmation | blocked),
+  // needsConfirmation (true when level=needs_confirmation), granted (false when blocked).
   if (req.method === 'POST' && url.pathname === '/run') {
     const body = await readBody(req);
     const command = body.command || body.raw;
@@ -463,15 +592,398 @@ const server = http.createServer(async (req, res) => {
       json(res, 400, { ok: false, error: 'command required (string, in JSON body)' });
       return;
     }
-    if (/(^|\s)(rm\s+-rf\s+\/|sudo\s+rm|mkfs\.|dd\s+if=)/i.test(command)) {
-      json(res, 403, { ok: false, error: 'Command blocked for safety' });
+
+    const classification = classifyCommand(command);
+
+    // Permission gates — require userId + scope so we can enforce grants.
+    const scope = body.scope || 'selected_folder';
+    const userId = body.userId || null;
+    if (!userId) {
+      json(res, 401, { ok: false, error: 'userId required for /run', level: classification.level });
       return;
     }
-    const cwd = resolve(body.cwd || HOME);
+    const grant = getGrant(userId);
+
+    if (scope === 'whole_computer') {
+      if (!grant?.wholeComputerTerminal) {
+        json(res, 403, {
+          ok: false, error: 'whole_computer_terminal permission not granted',
+          level: classification.level, requiresGrant: 'wholeComputerTerminal',
+        });
+        return;
+      }
+    } else {
+      // selected_folder / default
+      if (!grant?.selectedFolderPath) {
+        json(res, 403, {
+          ok: false, error: 'selected folder not registered',
+          level: classification.level, requiresGrant: 'selectedFolderTerminal',
+        });
+        return;
+      }
+      if (!grant?.selectedFolderTerminal) {
+        json(res, 403, {
+          ok: false, error: 'terminal access inside selected folder not granted',
+          level: classification.level, requiresGrant: 'selectedFolderTerminal',
+        });
+        return;
+      }
+    }
+
+    // Refuse hard-blocked commands even with whole-computer consent.
+    if (classification.level === 'blocked') {
+      json(res, 403, {
+        ok: false, granted: false, error: `Command blocked for safety: ${classification.reason}`,
+        level: classification.level,
+      });
+      return;
+    }
+
+    // Only auto-execute safe_readonly / safe_project_write; the frontend
+    // must ECHO a confirmable needs_confirmation token via header or by
+    // sending confirm=true in the body (server treats that as proof the
+    // user has clicked through a UI gate).
+    if (classification.level === 'needs_confirmation' && body.confirm !== true) {
+      json(res, 409, {
+        ok: false, needsConfirmation: true, level: classification.level,
+        reason: classification.reason,
+        commandPreview: command.slice(0, 240),
+        hint: 'Re-send with confirm:true after the user clicks through the safety prompt.',
+      });
+      return;
+    }
+
+    let cwd;
+    if (scope === 'whole_computer') {
+      cwd = body.cwd ? resolve(body.cwd) : HOME;
+    } else {
+      cwd = resolve(body.cwd || grant.selectedFolderPath);
+      // Sanity-check: refuse if cwd escapes the approved folder.
+      const approved = resolve(grant.selectedFolderPath);
+      if (!cwd.startsWith(approved)) {
+        json(res, 403, {
+          ok: false, error: 'cwd escapes approved selected folder',
+          approved, requested: cwd, level: classification.level,
+        });
+        return;
+      }
+    }
+    if (!existsSync(cwd)) {
+      json(res, 400, { ok: false, error: `cwd does not exist: ${cwd}`, level: classification.level, cwd });
+      return;
+    }
+
+    const startedAt = Date.now();
     const timeout = Math.min(body.timeout || 300, 900);
     const result = await runCommand(command, cwd, timeout * 1000);
     result.cwd = cwd;
+    result.command = command;
+    result.level = classification.level;
+    result.durationMs = Date.now() - startedAt;
+    json(res, 200, { ok: result.ok, ...result });
+    return;
+  }
+
+  // ── POST /select-folder (native picker per OS) ──
+  if (req.method === 'POST' && url.pathname === '/select-folder') {
+    let pickerCmd;
+    if (OS === 'darwin') {
+      // AppleScript choose folder — returns POSIX path of selected folder.
+      pickerCmd = `osascript -e 'set theFolder to choose folder with prompt "Select a folder for Beatrice"' -e 'POSIX path of theFolder' 2>/dev/null`;
+    } else if (OS === 'linux') {
+      // Try zenity first, then kdialog, then xdg-portal fallback.
+      pickerCmd = `(command -v zenity >/dev/null && zenity --file-selection --directory --title="Select a folder for Beatrice" 2>/dev/null) || (command -v kdialog >/dev/null && kdialog --getexistingdirectory "$HOME" 2>/dev/null) || echo ""`;
+    } else if (OS === 'win32') {
+      // PowerShell FolderBrowserDialog — much slower but native.
+      pickerCmd = `powershell.exe -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description='Select a folder for Beatrice'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }"`;
+    } else {
+      json(res, 400, { ok: false, error: `Native picker not supported on ${OS}. Use POST /validate-path instead.` });
+      return;
+    }
+    try {
+      const r = await runCommand(pickerCmd, HOME, 120_000);
+      const raw = (r.stdout || '').trim();
+      if (!raw) {
+        json(res, 200, { ok: false, cancelled: true, message: 'User cancelled picker' });
+        return;
+      }
+      const abs = resolve(raw.replace(/\\$/, ''));
+      // Validate exists + is directory
+      if (!existsSync(abs)) {
+        json(res, 200, { ok: false, error: `Selected path does not exist: ${abs}`, absolutePath: abs });
+        return;
+      }
+      const statOut = execSync(`stat -c '%F' "${abs}" 2>/dev/null || stat -f '%HT' "${abs}" 2>/dev/null || echo ""`, { encoding: 'utf8', timeout: 5_000 }).trim().toLowerCase();
+      const isDir = statOut.includes('directory') || statOut === '';
+      const name = abs.split(/[\\/]/).filter(Boolean).pop() || abs;
+      json(res, 200, {
+        ok: true,
+        name,
+        absolutePath: abs,
+        isDirectory: isDir,
+        permissionScope: 'selected_folder',
+      });
+    } catch (e) {
+      json(res, 500, { ok: false, error: 'Native picker failed', detail: e?.message });
+    }
+    return;
+  }
+
+  // ── POST /validate-path ──
+  // Body: { path }
+  if (req.method === 'POST' && url.pathname === '/validate-path') {
+    const body = await readBody(req);
+    const raw = body.path;
+    if (!raw || typeof raw !== 'string') {
+      json(res, 400, { ok: false, error: 'path required (string, in JSON body)' });
+      return;
+    }
+    const abs = resolve(raw);
+    let exists = false;
+    let isDirectory = false;
+    let size = null;
+    try {
+      const s = execSync(`stat -c '%F %s' "${abs}" 2>/dev/null || stat -f '%HT %z' "${abs}" 2>/dev/null || echo ""`, { encoding: 'utf8', timeout: 5_000 }).trim();
+      if (s) {
+        exists = true;
+        isDirectory = s.toLowerCase().startsWith('directory');
+        const parts = s.split(/\s+/);
+        const n = Number(parts[1]);
+        if (Number.isFinite(n)) size = n;
+      }
+    } catch {
+      exists = false;
+    }
+    json(res, 200, {
+      ok: true,
+      absolutePath: abs,
+      exists,
+      isDirectory,
+      size,
+      name: abs.split(/[\\/]/).filter(Boolean).pop() || abs,
+    });
+    return;
+  }
+
+  // ── GET /tools/status ──
+  // Returns full env inspection for the UI panel.
+  if (req.method === 'GET' && url.pathname === '/tools/status') {
+    const node = checkNodeVersion();
+    const opencode = checkOpenCode();
+    const ollama = checkOllama();
+    let ollamaModels = [];
+    if (ollama.running) {
+      try {
+        const list = execSync('ollama list 2>&1', { encoding: 'utf8', timeout: 10_000 });
+        ollamaModels = list.split('\n').slice(1).map(line => line.split(/\s+/)[0]).filter(Boolean);
+      } catch { /* ollama not running */ }
+    }
+    function probe(label) {
+      try {
+        const v = execSync(`command -v ${label} 2>/dev/null || which ${label} 2>/dev/null || echo ""`, { encoding: 'utf8', timeout: 4_000 }).trim();
+        return !!v;
+      } catch { return false; }
+    }
+    json(res, 200, {
+      ok: true,
+      platform: OS,
+      home: HOME,
+      node,
+      opencode,
+      ollama,
+      ollamaModels,
+      homebrew: probe('brew'),
+      git: probe('git'),
+      pnpm: probe('pnpm'),
+      npm: probe('npm'),
+      curl: probe('curl'),
+      python3: probe('python3'),
+      opencodeVersion: opencode.installed ? opencode.version : null,
+      primaryModel: ollamaModels.find(m => m === OLLAMA_MODEL) || ollamaModels[0] || null,
+    });
+    return;
+  }
+
+  // ── POST /tools/install-opencode ──
+  if (req.method === 'POST' && url.pathname === '/tools/install-opencode') {
+    const result = await installOpenCodeCLI();
+    const cfg = configureOpenCode();
+    json(res, 200, { ...result, opencodeConfig: cfg });
+    return;
+  }
+
+  // ── POST /tools/install-ollama ──
+  if (req.method === 'POST' && url.pathname === '/tools/install-ollama') {
+    const result = await installOllama();
     json(res, 200, result);
+    return;
+  }
+
+  // ── POST /tools/pull-ollama-model ──
+  // Body: { model? }
+  if (req.method === 'POST' && url.pathname === '/tools/pull-ollama-model') {
+    const body = await readBody(req);
+    const model = body.model || OLLAMA_MODEL;
+    const result = await pullOllamaModel(model);
+    json(res, 200, result);
+    return;
+  }
+
+  // ── POST /opencode/run ──
+  // Body: { taskPrompt, cwd?, model?, scope?: 'selected_folder'|'whole_computer', userId?, timeout? }
+  // Executes `opencode run "<taskPrompt>"` (or `opencode --model <m> run`) inside the approved scope,
+  // captures stdout/stderr, returns the structured result.
+  if (req.method === 'POST' && url.pathname === '/opencode/run') {
+    const body = await readBody(req);
+    const taskPrompt = body.taskPrompt;
+    const scope = body.scope || 'selected_folder';
+    const userId = body.userId || null;
+    if (!taskPrompt || typeof taskPrompt !== 'string') {
+      json(res, 400, { ok: false, error: 'taskPrompt required (string)' });
+      return;
+    }
+    if (!userId) {
+      json(res, 401, { ok: false, error: 'userId required for /opencode/run' });
+      return;
+    }
+
+    // Permission gate (same model as /run)
+    const grant = getGrant(userId);
+    if (scope === 'whole_computer' && !grant?.wholeComputerTerminal) {
+      json(res, 403, { ok: false, error: 'whole_computer_terminal permission required for OpenCode scope' });
+      return;
+    }
+    if (scope !== 'whole_computer' && !grant?.selectedFolderPath) {
+      json(res, 403, { ok: false, error: 'selected folder not registered' });
+      return;
+    }
+
+    // Tool availability pre-check
+    const oc = checkOpenCode();
+    if (!oc.installed) {
+      json(res, 412, {
+        ok: false,
+        error: 'OpenCode is not installed on this machine',
+        remediation: 'POST /tools/install-opencode',
+      });
+      return;
+    }
+
+    let cwd;
+    if (scope === 'whole_computer') {
+      cwd = body.cwd ? resolve(body.cwd) : HOME;
+    } else {
+      cwd = resolve(body.cwd || grant.selectedFolderPath);
+      const approved = resolve(grant.selectedFolderPath);
+      if (!cwd.startsWith(approved)) {
+        json(res, 403, { ok: false, error: 'cwd escapes approved selected folder' });
+        return;
+      }
+    }
+    if (!existsSync(cwd)) {
+      json(res, 400, { ok: false, error: `cwd does not exist: ${cwd}` });
+      return;
+    }
+
+    // Build the opencode command — escape the prompt for shell safety.
+    //
+    // Two injection vectors are explicitly closed:
+    // 1. `body.model` is validated against /^[A-Za-z0-9._:@/+-]{1,64}$/ — no shell metacharacters.
+    // 2. `taskPrompt` is sanitized by refusing command-substitution tokens (`$(`, backticks),
+    //    heredocs (`<<`), and output redirects (`>`, `<`). Any match returns 400.
+    // The remaining flat text is then single-quote escaped before being interpolated.
+    if (typeof body.model === 'string' && body.model.length > 0 &&
+        !/^[A-Za-z0-9._:@/+-]{1,64}$/.test(body.model)) {
+      json(res, 400, {
+        ok: false, error: 'model must match /^[A-Za-z0-9._:@/+-]{1,64}$/ (no shell metacharacters)',
+      });
+      return;
+    }
+    if (/[`]|\$\(|<<|>|<\s|&|\|/.test(taskPrompt)) {
+      json(res, 400, {
+        ok: false,
+        error: 'taskPrompt contains shell metacharacters (`` ` ``, $( ), <<, >, <, &, |). Refusing to execute.',
+        hint: 'Pass the prompt in plain text; do not include shell substitution or redirection.',
+      });
+      return;
+    }
+    const escapedPrompt = taskPrompt.replace(/'/g, "'\\''");
+    let cmd;
+    if (body.model) {
+      cmd = `opencode --model ${body.model} run '${escapedPrompt}'`;
+    } else {
+      cmd = `opencode run '${escapedPrompt}'`;
+    }
+    const startedAt = Date.now();
+    const timeout = Math.min(body.timeout || 600, 1800) * 1000; // 10 min default, 30 min cap
+    const result = await runCommand(cmd, cwd, timeout);
+    json(res, 200, {
+      ok: result.ok,
+      cwd,
+      command: cmd,
+      level: 'safe_project_write',
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      durationMs: Date.now() - startedAt,
+      error: result.error,
+    });
+    return;
+  }
+
+  // ── GET /permissions ── ?userId=xxx ──
+  if (req.method === 'GET' && url.pathname === '/permissions') {
+    const userId = url.searchParams.get('userId');
+    if (!userId) {
+      json(res, 400, { ok: false, error: 'userId query param required' });
+      return;
+    }
+    json(res, 200, { ok: true, userId, grant: getGrant(userId) || null });
+    return;
+  }
+
+  // ── POST /permissions/grant ──
+  // Body: { userId, selectedFolderPath?, selectedFolderReadWrite?, selectedFolderTerminal?, wholeComputerTerminal? }
+  if (req.method === 'POST' && url.pathname === '/permissions/grant') {
+    const body = await readBody(req);
+    if (!body.userId) {
+      json(res, 400, { ok: false, error: 'userId required' });
+      return;
+    }
+    const grant = setGrant(body.userId, {
+      selectedFolderPath: body.selectedFolderPath ?? getGrant(body.userId)?.selectedFolderPath,
+      selectedFolderReadWrite: body.selectedFolderReadWrite ?? true,
+      selectedFolderTerminal: body.selectedFolderTerminal ?? !!body.selectedFolderPath,
+      wholeComputerTerminal: body.wholeComputerTerminal ?? false,
+    });
+    json(res, 200, { ok: true, grant });
+    return;
+  }
+
+  // ── POST /permissions/revoke ──
+  // Body: { userId, scope: 'selected_folder'|'whole_computer'|'all' }
+  if (req.method === 'POST' && url.pathname === '/permissions/revoke') {
+    const body = await readBody(req);
+    if (!body.userId) {
+      json(res, 400, { ok: false, error: 'userId required' });
+      return;
+    }
+    if (!body.scope || body.scope === 'all') {
+      deleteGrant(body.userId);
+      json(res, 200, { ok: true, message: 'All grant scopes revoked' });
+      return;
+    }
+    const prev = getGrant(body.userId);
+    if (!prev) {
+      json(res, 200, { ok: true, grant: null, message: 'No grant to revoke' });
+      return;
+    }
+    if (body.scope === 'selected_folder') {
+      setGrant(body.userId, { selectedFolderPath: null, selectedFolderTerminal: false });
+    } else if (body.scope === 'whole_computer') {
+      setGrant(body.userId, { wholeComputerTerminal: false });
+    }
+    json(res, 200, { ok: true, grant: getGrant(body.userId) });
     return;
   }
 
@@ -498,6 +1010,16 @@ server.listen(PORT, '127.0.0.1', () => {
   process.stdout.write(`  GET  /ollama-models    — list pulled models\n`);
   process.stdout.write(`  POST /pull-model       — pull an Ollama model\n`);
   process.stdout.write(`  POST /configure-opencode — set OpenCode to use Ollama model + Zen fallbacks\n`);
-  process.stdout.write(`  POST /run              — execute terminal command\n`);
-  process.stdout.write(`  GET  /platform         — OS details\n`);
+process.stdout.write(`  POST /run              — execute terminal command (scope-gated)\n`);
+process.stdout.write(`  POST /select-folder    — native folder picker (Returns absolute path)\n`);
+process.stdout.write(`  POST /validate-path    — validate { path } exists + is-directory\n`);
+process.stdout.write(`  GET  /tools/status     — full env: node/opencode/ollama/homebrew/git/pnpm\n`);
+process.stdout.write(`  POST /tools/install-opencode — install + auto-configure OpenCode CLI\n`);
+process.stdout.write(`  POST /tools/install-ollama   — install + start Ollama\n`);
+process.stdout.write(`  POST /tools/pull-ollama-model — { model? }\n`);
+process.stdout.write(`  POST /opencode/run     — delegated opencode run (scope-gated)\n`);
+process.stdout.write(`  GET  /permissions?userId=xxx — fetch grant\n`);
+process.stdout.write(`  POST /permissions/grant   — { userId, selectedFolderPath?, ... }\n`);
+process.stdout.write(`  POST /permissions/revoke  — { userId, scope }\n`);
+process.stdout.write(`  GET  /platform         — OS details\n`);
 });

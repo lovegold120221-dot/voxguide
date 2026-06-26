@@ -31,7 +31,7 @@ if (eburonWarnings.length > 0 && process.env.NODE_ENV !== 'production') {
 }
 
 const app = express();
-const PORT = parseInt(process.env.PORT || process.env.SANDBOX_PORT || '4200');
+const PORT = parseInt(process.env.PORT || process.env.SANDBOX_PORT || '4300');
 
 app.use(cors({
   origin: '*',
@@ -74,7 +74,7 @@ app.get('/', (_req, res) => {
   if (fs.existsSync(distIndex)) {
     res.sendFile(distIndex);
   } else {
-    res.send('Beatrice Backend API Server is running. To open the application, visit http://localhost:3000');
+    res.send('Beatrice Backend API Server is running. To open the application, visit http://localhost:3100');
   }
 });
 
@@ -952,7 +952,7 @@ function sliceTimeoutPerModel(userTimeout: number, modelsRemaining: number): num
 }
 
 const BEATRICE_WORKSPACE_DIR = process.env.BEATRICE_WORKSPACE_DIR || '/data/beatrice-workspace';
-const BEATRICE_PUBLIC_URL = process.env.BEATRICE_PUBLIC_URL || 'https://whatsapp.eburon.ai';
+const BEATRICE_PUBLIC_URL = process.env.BEATRICE_PUBLIC_URL || 'https://beatrice.eburon.ai';
 const SANDBOX_ARTIFACTS_DIR = path.join(BEATRICE_WORKSPACE_DIR, 'sandbox');
 
 function ensureBeatricedDir(dir: string): void {
@@ -2596,6 +2596,178 @@ app.post('/api/open-site/clone', async (req, res) => {
   }
 });
 
+// ── Site cloning REBRAND ─────────────────────────────────────────────────────────────────────
+
+const BEATRICE_REBRAND_VALIDATE_PORT = parseInt(process.env.BEATRICE_REBRAND_VALIDATE_PORT || '8000', 10);
+const REBRAND_LOGO_MAX_BYTES = 4 * 1024 * 1024;
+const REBRAND_LOGO_URL_RE = /^(https?:\/\/)[A-Za-z0-9._\/-]{1,512}$/;
+const REBRAND_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/;
+
+app.post('/api/open-site/rebrand', async (req, res) => {
+  try {
+    const slugInput = typeof req.body?.slug === 'string' ? req.body.slug.trim() : '';
+    const safeSlug = sanitizePathSegment(slugInput);
+    if (!safeSlug || safeSlug !== slugInput) {
+      res.status(400).json({ ok: false, error: 'slug must match [a-zA-Z0-9._-]{1,80}' });
+      return;
+    }
+    const targetDir = path.join(CLONED_SITES_DIR, safeSlug);
+    if (targetDir !== CLONED_SITES_DIR && !targetDir.startsWith(CLONED_SITES_DIR + path.sep)) {
+      res.status(400).json({ ok: false, error: 'slug escapes cloned-sites root' });
+      return;
+    }
+    if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+      res.status(404).json({ ok: false, error: 'no such clone — POST /api/open-site/clone first' });
+      return;
+    }
+
+    const body = (req.body && typeof req.body === 'object') ? req.body : {};
+    const brand = body.brand && typeof body.brand === 'object' ? body.brand : {};
+    const userRequest = typeof body.userRequest === 'string' ? body.userRequest.trim().slice(0, 2000) : '';
+
+    for (const k of ['primaryColor', 'accentColor'] as const) {
+      const v = brand[k];
+      if (v && typeof v !== 'string') {
+        res.status(400).json({ ok: false, error: 'brand.' + k + ' must be a string' }); return;
+      }
+      if (v && !REBRAND_COLOR_RE.test(v)) {
+        res.status(400).json({ ok: false, error: 'brand.' + k + ' must match /^#[0-9a-fA-F]{3,8}$/' }); return;
+      }
+    }
+    if (brand.fonts !== undefined) {
+      if (!Array.isArray(brand.fonts) || brand.fonts.some((f: unknown) => typeof f !== 'string' || (f as string).length > 60)) {
+        res.status(400).json({ ok: false, error: 'brand.fonts must be string[] (each ≤ 60 chars)' }); return;
+      }
+    }
+    if (brand.logoUrl !== undefined && brand.logoUrl !== null && brand.logoUrl !== '') {
+      if (typeof brand.logoUrl !== 'string' || !REBRAND_LOGO_URL_RE.test(brand.logoUrl)) {
+        res.status(400).json({
+          ok: false,
+          error: 'brand.logoUrl must match /^(https?:\/\/)[A-Za-z0-9._\/-]{1,512}$/',
+          maxBytes: REBRAND_LOGO_MAX_BYTES,
+        }); return;
+      }
+    }
+    if (brand.copy !== undefined && brand.copy !== null) {
+      if (typeof brand.copy !== 'object' || Array.isArray(brand.copy)) {
+        res.status(400).json({ ok: false, error: 'brand.copy must be a Record<string,string>' }); return;
+      }
+      for (const [k, v] of Object.entries(brand.copy as Record<string, unknown>)) {
+        if (typeof k !== 'string' || k.length > 80 || typeof v !== 'string' || (v as string).length > 500) {
+          res.status(400).json({ ok: false, error: 'brand.copy entries must be {key≤80:string≤500}' }); return;
+        }
+      }
+    }
+
+    const brandSpecLines: string[] = [];
+    if (brand.name) brandSpecLines.push('Brand name: ' + String(brand.name).slice(0, 120));
+    if (brand.tagline) brandSpecLines.push('Tagline: ' + String(brand.tagline).slice(0, 240));
+    if (brand.primaryColor) brandSpecLines.push('Primary color: ' + String(brand.primaryColor));
+    if (brand.accentColor) brandSpecLines.push('Accent color: ' + String(brand.accentColor));
+    if (Array.isArray(brand.fonts) && brand.fonts.length) {
+      brandSpecLines.push('Fonts (priority order): ' + brand.fonts.slice(0, 6).join(', '));
+    }
+    if (brand.copy && typeof brand.copy === 'object') {
+      const lines = Object.entries(brand.copy as Record<string, string>).map(([k, v]) => '  - ' + k + ': ' + v);
+      if (lines.length) brandSpecLines.push('Copy overrides:\n' + lines.join('\n'));
+    }
+    if (brand.logoUrl) brandSpecLines.push('Logo image (validated URL): ' + String(brand.logoUrl));
+    if (brand.logoText) brandSpecLines.push('Logo text fallback: ' + String(brand.logoText).slice(0, 80));
+    const brandSpec = brandSpecLines.join('\n');
+
+    const prompt = [
+      'SITE-CLONING / REBRAND TASK.',
+      'The working directory contains an already-cloned website (mirrored via wget --mirror --convert-links --adjust-extension --page-requisites --no-parent). You must rebrand assets in place while keeping the site functional.',
+      '',
+      '1. SCAN: list *.html, *.css, *.scss, *.js, *.svg under the cwd and read each one before editing.',
+      '2. METADATA: rewrite <title>, <meta name="description">, <meta property="og:*">, <link rel="icon">, and <html lang> to match the supplied brand.',
+      '3. PALETTE: prefer rewriting CSS custom properties (--primary, --accent). If only hardcoded values exist, replace the dominant original primary across all rules, then the accent. The brand spec below names the new colors in hex.',
+      '4. TYPOGRAPHY: when brand.fonts are listed, swap font-family declarations to the first listed family. Embed via <link rel="stylesheet"> or via an existing CDN reference.',
+      '5. LOGO: when brand.logoUrl is provided, fetch it ONLY after validating the URL against /^(https?:\\/\\/)[A-Za-z0-9._\\/-]{1,512}$/ AND confirming the response Content-Length is under ' + REBRAND_LOGO_MAX_BYTES + ' bytes (use \`curl -fsSLI\` or a HEAD request first to inspect Content-Length). Save the asset as assets/brand-logo.<ext> and update <img> logo tags whose alt mentions the original brand. When brand.logoText is supplied, replace the logo image with a styled text element matching the original layout.',
+      '6. COPY: replace ONLY the strings listed in brand.copy. Do not rewrite the full body text.',
+      '7. STRUCTURE: do NOT delete pages, navigation, or working JavaScript. The site must continue to navigate and submit forms.',
+      '8. ASSETS: existing images stay at their original paths.',
+      '9. VALIDATION: start nohup python3 -m http.server ' + BEATRICE_REBRAND_VALIDATE_PORT + ' >/dev/null 2>&1 & (capture the pid), then curl http://127.0.0.1:' + BEATRICE_REBRAND_VALIDATE_PORT + '/ and a couple of nested pages. Confirm HTTP 200 and that the new <title> + new primary color appear in the response body.',
+      '10. CLEANUP: kill the validation server and remove the temp Python listener. Report changed files precisely.',
+      '',
+      'PRODUCTION-READINESS INVARIANTS — NON-NEGOTIABLE.',
+      '1. ZERO PLACEHOLDERS: no TODO / FIXME / Lorem ipsum / fake test@test.com.',
+      '2. NO SECRETS: never print API keys, .env values, keychain entries.',
+      '3. VALIDATION: do not claim done until curl returns HTTP 200 on at least the top-level page.',
+      '',
+      'BRAND SPEC:',
+      brandSpec || '(no brand spec supplied — apply minimal sensible defaults)',
+      '',
+      'USER REQUEST:',
+      userRequest || 'Apply the supplied brand spec to this cloned site.',
+      '',
+    ].join('\n');
+
+    const timeout = Math.min(Math.max(Number(body.timeout) || 120, 30), 600);
+    const modelOverride = (typeof body.model === 'string' && /^opencode\/[A-Za-z0-9._:-]{1,60}$/.test(body.model))
+      ? body.model
+      : OPENCODE_MODEL;
+
+    setTaskProgress(safeSlug, 'rebrand_starting', { agent: 'opencode', message: 'composing rebrand prompt' });
+    const startedAt = Date.now();
+    const result = await runOpenCodeTerminalTask({
+      task: prompt,
+      timeout,
+      appName: 'rebrand-' + safeSlug,
+      workspacePath: targetDir,
+      appUrl: buildOpenSitePreviewUrl(safeSlug).absolute,
+      modelOverride,
+    });
+    const durationMs = Date.now() - startedAt;
+    setTaskProgress(safeSlug, result.ok ? 'rebrand_done' : 'rebrand_error', { agent: 'opencode' });
+    setTimeout(() => taskProgress.delete(safeSlug), 60000);
+
+    const preview = buildOpenSitePreviewUrl(safeSlug);
+    return res.json({
+      ok: result.ok,
+      slug: safeSlug,
+      previewPath: preview.path,
+      previewUrl: preview.absolute,
+      exitCode: result.exitCode,
+      durationMs,
+      timedOut: result.timedOut,
+      truncated: result.truncated,
+      cwd: targetDir,
+      agent: 'opencode',
+      model: modelOverride,
+      maxLogoBytes: REBRAND_LOGO_MAX_BYTES,
+      validatePort: BEATRICE_REBRAND_VALIDATE_PORT,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      error: result.ok ? undefined : (result.error || 'opencode exited non-zero'),
+    });
+  } catch (err: any) {
+    console.error('[open-site/rebrand] error:', (err?.message || '').slice(0, 200));
+    return res.status(500).json({ ok: false, error: (err?.message || 'rebrand failed').slice(0, 500) });
+  }
+});
+
+app.get('/api/open-site/rebrand/status/:slug', async (req, res) => {
+  const raw = String(req.params.slug || '').trim();
+  const safeSlug = sanitizePathSegment(raw);
+  if (!safeSlug || safeSlug !== raw) {
+    res.status(400).json({ ok: false, error: 'slug must match [a-zA-Z0-9._-]{1,80}' });
+    return;
+  }
+  return res.json({ ok: true, slug: safeSlug, status: taskProgress.get(safeSlug) || null });
+});
+
+app.get('/api/open-site/rebrand/caps', async (_req, res) => {
+  return res.json({
+    ok: true,
+    maxLogoBytes: REBRAND_LOGO_MAX_BYTES,
+    logoUrlPattern: '/^(https?:\\/\\/)[A-Za-z0-9._\\/-]{1,512}$/',
+    colorPattern: '/^#[0-9a-fA-F]{3,8}$/',
+    validatePort: BEATRICE_REBRAND_VALIDATE_PORT,
+    defaultModel: OPENCODE_MODEL,
+  });
+});
+
 app.get('/api/open-site/list', async (_req, res) => {
   try {
     if (!fs.existsSync(CLONED_SITES_DIR)) { res.json({ ok: true, items: [] }); return; }
@@ -2667,6 +2839,125 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(distPath, 'index.html'), (err) => {
     if (err) next();
   });
+});
+
+// ── Skill-pack installer (gstack, openmontage-video) ────────────────────────────────────────────────────
+//
+// Clones the upstream skill repositories into a beatrice-owned install root.
+// Hardcoded allowlist so we never clone arbitrary URLs.
+const BEATRICE_SKILLS_INSTALL_ROOT: string = process.env.BEATRICE_SKILLS_INSTALL_ROOT
+  || path.join(BEATRICE_WORKSPACE_DIR || '/data/beatrice-workspace', 'skills');
+const BEATRICE_SKILLS_ALLOWLIST: Record<string, { repo: string; tag: string }> = {
+  'gstack': {
+    repo: 'https://github.com/garrytan/gstack.git',
+    tag: 'main',
+  },
+  'openmontage-video': {
+    repo: 'https://github.com/calesthio/OpenMontage.git',
+    tag: 'main',
+  },
+};
+const BEATRICE_SKILLS_SLUG_RE = /^[a-z][a-z0-9-]{1,40}$/;
+
+function ensureSkillsRoot(): void {
+  try { fs.mkdirSync(BEATRICE_SKILLS_INSTALL_ROOT, { recursive: true }); } catch { /* ignore */ }
+}
+
+function sanitizeSkillsSlug(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim().toLowerCase();
+  if (!BEATRICE_SKILLS_SLUG_RE.test(v)) return null;
+  if (!(v in BEATRICE_SKILLS_ALLOWLIST)) return null;
+  return v;
+}
+
+app.get('/api/skills/caps', (_req, res) => {
+  try {
+    const which = (bin: string): boolean => {
+      try { return Boolean(execSync(`which ${bin}`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()); }
+      catch { return false; }
+    };
+    const installed: Record<string, boolean> = {
+      git: which('git'),
+      opencode: which('opencode'),
+      python3: which('python3'),
+      ffmpeg: which('ffmpeg'),
+      node: which('node'),
+    };
+    res.json({
+      ok: true,
+      installRoot: BEATRICE_SKILLS_INSTALL_ROOT,
+      allowlist: Object.keys(BEATRICE_SKILLS_ALLOWLIST),
+      installed,
+      ready: installed.git === true,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: (err && err.message ? err.message : 'caps failed').slice(0, 300) });
+  }
+});
+
+app.get('/api/skills/list', (_req, res) => {
+  try {
+    ensureSkillsRoot();
+    const items: Array<{ slug: string; path: string; installed: boolean; hasReadme: boolean }> = [];
+    for (const slug of Object.keys(BEATRICE_SKILLS_ALLOWLIST)) {
+      const target = path.join(BEATRICE_SKILLS_INSTALL_ROOT, slug);
+      const installed: boolean = fs.existsSync(path.join(target, '.git'));
+      const hasReadme: boolean = fs.existsSync(path.join(target, 'README.md'));
+      items.push({ slug, path: target, installed, hasReadme });
+    }
+    res.json({ ok: true, root: BEATRICE_SKILLS_INSTALL_ROOT, items });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: (err && err.message ? err.message : 'list failed').slice(0, 300) });
+  }
+});
+
+app.post('/api/skills/install', (req, res) => {
+  try {
+    const slug = sanitizeSkillsSlug(req.body && req.body.slug);
+    if (!slug) {
+      res.status(400).json({
+        ok: false,
+        error: 'slug must match allowlist',
+        allowlist: Object.keys(BEATRICE_SKILLS_ALLOWLIST),
+      });
+      return;
+    }
+    ensureSkillsRoot();
+    let hasGit = true;
+    try { hasGit = Boolean(execSync('which git', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()); } catch { hasGit = false; }
+    if (!hasGit) {
+      res.status(503).json({ ok: false, error: 'git is not installed on the server' });
+      return;
+    }
+    const def = BEATRICE_SKILLS_ALLOWLIST[slug];
+    const target = path.join(BEATRICE_SKILLS_INSTALL_ROOT, slug);
+    if (!target.startsWith(BEATRICE_SKILLS_INSTALL_ROOT + path.sep)) {
+      res.status(400).json({ ok: false, error: 'target escapes install root' });
+      return;
+    }
+    const start = Date.now();
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+    const cmd = `git clone --depth 1 --single-branch --branch ${def.tag} ${def.repo} ${target}`;
+    const stdout = execSync(cmd, {
+      cwd: BEATRICE_SKILLS_INSTALL_ROOT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 120_000,
+    }).toString();
+    res.json({
+      ok: true,
+      slug,
+      repo: def.repo,
+      installPath: target,
+      stdoutTail: stdout.slice(-500),
+      durationMs: Date.now() - start,
+      nextSteps: 'Cloned. Read .opencode/skills/' + slug + '/SKILL.md for post-clone steps (gstack: ./setup --host opencode; openmontage-video: make setup).',
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: (err && err.message ? err.message : 'install failed').slice(0, 500) });
+  }
 });
 
 app.use((_req, res) => {

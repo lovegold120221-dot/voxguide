@@ -9,7 +9,7 @@
   },
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "vite --port=3000 --strictPort --host=0.0.0.0",
+    "dev": "vite --port=3100 --strictPort --host=0.0.0.0",
     "dev:api": "tsx server/index.ts",
     "dev:full": "npm run dev:api & npm run dev",
     "build": "vite build",
@@ -26,6 +26,8 @@
     "docker:whatsapp:up": "docker compose -f docker-compose.whatsapp.yml up",
     "docker:whatsapp:down": "docker compose -f docker-compose.whatsapp.yml down",
     "smoke:whatsapp": "node scripts/smoke-whatsapp-server.mjs",
+    "smoke:skills-install": "node scripts/smoke-skills-install.mjs",
+    "verify": "node scripts/verify.mjs",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",

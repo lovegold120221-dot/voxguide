@@ -1,6 +1,6 @@
-# Voxx-Zero (Beatrice) — Project Knowledge
+# Beatrice — Project Knowledge
 
-Real-time voice AI agent by Eburon AI, specialized for the Belgian market. Live at `https://whatsapp.eburon.ai`. Code lives in `/opt/voxx-zero`.
+Real-time voice AI agent by Eburon AI (Belgian market focus). Live at `https://beatrice.eburon.ai`. Code lives in `/opt/beatrice`.
 
 ## Quickstart
 
@@ -19,10 +19,10 @@ Local dev (Node 22+ required):
 ```bash
 cp .env.example .env              # fill in EBURON_CORE_KEY, SUPABASE_*, VITE_FIREBASE_*, GOOGLE_CLIENT_*
 npm install
-npm run dev:full                   # frontend :3000 + backend :4200
+npm run dev:full                   # frontend :3100 + backend :4300
 # Or separately:
-npm run dev                        # Vite dev server
-npm run dev:api                    # Express via tsx
+npm run dev                        # Vite dev server on :3100
+npm run dev:api                    # Express via tsx on :4300
 npm run build                      # required before Docker build
 npm run lint                       # tsc --noEmit (pre-existing errors, do not fix)
 ```
@@ -46,7 +46,8 @@ Frontend (React 19 + Vite 6)            Backend (Express 4 + tsx, Node 22+)
 ├─ src/lib/voiceSession.ts (sole SDK)
 ├─ src/constants.ts      (147 langs)
 └─ src/version.ts        (PWA)
-                                      Functions (Firebase, Node 20)
+
+                                        Functions (Firebase, Node 20)
 AI Layer                                └─ functions/src/index.ts → VPS proxy
 ├─ Eburon Live API (voice, @google/genai — wrapped server-side by eburon-provider.ts,
 │                  client-side by src/lib/voiceSession.ts)
@@ -76,11 +77,13 @@ Data
 | Browser | Browser-Use + Cerebras (`gpt-oss-120b`) |
 | Sub-agent | OpenCode CLI (21+ skills cloned from `eburonhub-skills`) |
 | Local LLM | Ollama (Hermes 3 / qwen2.5-coder fallback) |
+| Desktop | Electron (`electron/main.cjs`, electron-builder mac/linux/win) |
 
 ## Conventions & Constraints
 
-- **Branding**: "Eburon" is a rebrand of an upstream provider. Never reference upstream names in tracked files. Run `npm run check:eburon-branding`. The scanner now bans `gemini`, `gemma`, `palm`, `bard`, `vertex ai`, `openai`, `chatgpt`, `dall-e`, `claude`, `anthropic`, `llama`, `mistral`, `mixtral`, `deepseek`, `qwen`, `cohere`, `groq`, `huggingface`, `langchain`, `llamaindex`, `ollama`, regex patterns like `gpt-4`, `claude-3`, `llama3.1`, etc. **Exception: `src/lib/voiceSession.ts` is the SOLE client-side file allowed to import the realtime SDK**; everything else must go through its public surface (`getVoiceClient`, `generateText`, `LiveServerMessage`, `Modality`, `Type`, `FunctionDeclaration`).
+- **Branding**: "Eburon" is a rebrand of an upstream provider. Never reference upstream names in tracked files. Run `npm run check:eburon-branding`. The scanner bans `gemini`, `gemma`, `palm`, `bard`, `vertex ai`, `openai`, `chatgpt`, `dall-e`, `claude`, `anthropic`, `llama`, `mistral`, `mixtral`, `deepseek`, `qwen`, `cohere`, `groq`, `huggingface`, `langchain`, `llamaindex`, `ollama`, regex patterns like `gpt-4`, `claude-3`, `llama3.1`, etc. **Exception: `src/lib/voiceSession.ts` is the SOLE client-side file allowed to import the realtime SDK**; everything else must go through its public surface (`getVoiceClient`, `generateText`, `LiveServerMessage`, `Modality`, `Type`, `FunctionDeclaration`).
 - **Model obfuscation**: In `server/eburon-provider.ts`, upstream model IDs are wrapped in `String.fromCharCode` to pass build verification. Aliases (`eburon_text`, `eburon_realtime_voice`, `eburon_sandbox_worker`, etc.) are public; the mapping table is in gitignored `LEGEND.md`. `vite.config.ts` also accepts the upstream API key name as a fallback so legacy `VITE_*` env vars keep working through `define:` → `process.env.*`.
+- **Default ports**: frontend `:3100`, backend `:4300`. `VITE_BACKEND_URL` empty in production (auto-detect via same-origin); `http://<hostname>:4300` in dev.
 - **HMR**: Off by default to stop browser flicker during agent edits. Set `DISABLE_HMR=true` in env to confirm (read in `vite.config.ts`).
 - **`getEnv` helper**: Always use `src/lib/env.ts` for env reads on the frontend — handles both `import.meta.env` and SSR `process.env`.
 - **Tool functions**: Each WhatsApp action is its own function (`send_whatsapp_message`, `get_whatsapp_contacts`, etc.) — never a single god function. Outbound sends require `delegated_send` permission.
@@ -92,18 +95,17 @@ Data
 - **Filesystem tools**: `local_*` (browser `showDirectoryPicker`, Chrome/Edge only) + `server_*` (`POST /api/filesystem/*` against `WORKSPACE_DATA_DIR` via `safeResolve` path validation; `multer` multipart upload capped at 50 MB). Both expose `read|write|list` over text/image/audio; images/audio return a dataUrl. `local_analyze_file` is a one-step alternative to chaining `local_read_file` → `analyze_image`/`transcribe_audio`.
 - **OpenCode Zen swap chain** (`/api/terminal/open-skills` → `runOpenTerminalWithFallback`): tries each entry in `OPENCODE_ZEN_FREE_MODELS` (env-overridable comma-separated `opencode/<model>` ids; defaults include `zenn-ai-large-free`, `deepseek-v4-flash-free`, `big-pickle`, `north-mini-code-free`, `mimo-v2.5-free`, `nemotron-3-ultra-free`). A failure with a quota/rate-limit signature (`429`/`402`/`out[-_ ]?of[-_ ]?tokens`/`RESOURCE_EXHAUSTED`/etc. in stderr/stdout) swaps to the next free model; a real task error breaks out and the local Ollama fallback (`OPEN_TERMINAL_FALLBACK_MODEL`) takes over as last resort. Errors annotate which models were tried for diagnostics.
 - **Open Sites PWA skill** (`.opencode/skills/open-sites-pwa/SKILL.md` + `POST /api/open-site/clone`): mirrors a user-supplied PWA URL into `$BEATRICE_WORKSPACE_DIR/cloned-sites/<slug>/` with `wget --mirror --convert-links --adjust-extension --page-requisites --no-parent --directory-prefix=<target>`. Backend adds polite defaults (`--execute robots=off`, `--wait=0.5`, `--random-wait`, `--tries=3`, `--timeout=30`, `--connect-timeout=15`, `--max-redirect=5`, `--user-agent=Beatrice-OpenSitesPWA/1.0`); the slug is `[a-zA-Z0-9._-]{1,80}` derived from `hostname + path + query` (leading `www.` stripped). Returns `{ previewPath: /beatrice-workspace/cloned-sites/<slug>/, previewUrl: <BEATRICE_PUBLIC_URL>/..., size, fileCount, exitCode, partial, durationMs }`. Sister endpoints: `GET /api/open-site/list` (audit existing clones), `DELETE /api/open-site/:slug` (free disk). The existing DocumentViewer (`src/components/DocumentViewer.tsx`) renders the result by setting `iframe src={previewUrl}` — no UI changes required.
+- **Electron app**: `npm run electron:dev` builds and launches Electron; platform installers via `electron:build:mac|linux|win|all`. Output app id `ai.eburon.beatrice`, productName `Beatrice`. Builds include `dist/**/*`, `electron/**/*`, `public/icon-eburon.svg`.
 
 ## Notable Gotchas
 
 - `npm run lint` shows ~7-10 pre-existing TypeScript errors in external types — ignore, do not attempt to fix them.
 - ESLint is configured ONLY for Firebase security rules, not application TS.
-- Root `package.json` name is `react-example` (legacy); do not rename carelessly.
 - `functions/` is excluded from root `tsconfig.json`; builds independently with `npm --prefix functions run build`.
 - `tsconfig.json` has `allowImportingTsExtensions: true` and `noEmit: true` — Vite handles compilation.
 - Production server uses `tsx` runtime (no compile step); VPS runs via PM2 (`voxx-backend`).
 - Docker `whatsapp` compose requires `npm run build` first (copies `dist/` into image).
 - Sandbox sub-agent artifacts land at `/beatrice-workspace/sandbox/artifact_<taskId>.html` and are served statically.
-- `VITE_BACKEND_URL` empty in production (auto-detect via same-origin); `http://localhost:4200` in dev.
 - Belgian tools are routed via `POST /api/belgian/tool { tool, params }` — 10 fixed tool names.
 - WhatsApp SSE stream at `GET /api/whatsapp/stream/:userId`; backend is authoritative source for connection status (Supabase mirror is not).
 - Sandbox runner fallback chain: `eburon_sandbox` → `eburon-multimodal-pro` → `cerebras-gpt-oss-120b` → `eburon-coder-pro` → `eburon_worker`.
@@ -119,6 +121,7 @@ Data
 | `src/components/DocumentViewer.tsx` | Full-screen sandbox/preview viewer (theme-aware, supports external URLs) |
 | `src/components/AdminPortal.tsx` | Admin / debug surface |
 | `src/components/VideoPage.tsx` | Camera + screen-share surface (audio+video) |
+| `src/components/WhatsAppOnboarding.tsx` | Desktop onboarding: Connect Local Folder → WhatsApp → Permissions → Location |
 | `src/lib/audio.ts` | PCM16 AudioWorkletNode streamer + recorder |
 | `src/lib/workspace.ts` | IndexedDB workspace + Google Drive upload |
 | `src/lib/supabase.ts` | Supabase client + `saveToolResult` |
@@ -126,7 +129,7 @@ Data
 | `src/lib/env.ts` | `getEnv` helper (single source for env reads) |
 | `src/lib/voiceSession.ts` | **Sole** client-side realtime SDK wrapper (allowlisted by branding check) |
 | `src/lib/belgianClient.ts` | Frontend client for Belgian admin tools |
-| `src/lib/whatsappClient.ts` | Frontend WhatsApp API client |
+| `src/lib/whatsappClient.ts` | Frontend WhatsApp API client (`getBackendUrl()` resolves `:4300`/production URL) |
 | `src/lib/webClient.ts` | Web glance / search helper client |
 | `src/lib/opfs.ts` | OPFS storage utilities |
 | `src/lib/db.ts` | IndexedDB low-level helpers |
@@ -134,6 +137,7 @@ Data
 | `src/constants.ts` | Shared `LANGUAGES` array (147 entries) |
 | `src/version.ts` | `APP_VERSION`, `APP_BUILD` for PWA updates |
 | `vite.config.ts` | Reads env (incl. legacy fallback for upstream SDK key name), exposes via `process.env.*` `define:` |
+| `electron/main.cjs` | Electron main process (loads `PROD_URL=https://beatrice.eburon.ai` in packaged mode) |
 | `server/index.ts` | Express entry, all routes, static serving, SPA fallback (includes `POST /api/filesystem/{read,write,list,upload}` VPS filesystem CRUD) |
 | `server/eburon-provider.ts` | **Sole** AI call wrapper (5 models, live-session token, image gen) |
 | `server/whatsapp.ts` | Baileys `WhatsAppManager` (sessions, QR, SSE, media cache) |
@@ -145,29 +149,31 @@ Data
 | `scripts/cerebras_browser.py` | Python wrapper calling Browser-Use + Cerebras |
 | `scripts/setup-cerebras.sh` | Python venv + browser-use installer |
 | `scripts/check-eburon-branding.mjs` | Branding scan (tokens + regex) |
-| `scripts/smoke-whatsapp-server.mjs` | Smoke test for `/api/health`, `/api/eburon/provider`, `/api/workspace/list` |
+| `scripts/smoke-whatsapp-server.mjs` | Smoke test for `/api/health`, `/api/eburon/provider`, `/api/workspace/list` (default `http://127.0.0.1:4300`) |
 | `bootstrap.sh` | Universal one-paste bootstrap (detects OS, downloads `install.sh`) |
 | `install.sh` | 14-step macOS/Debian/Ubuntu installer |
 | `install.ps1` | Windows PowerShell installer |
 | `.opencode/` | OpenCode CLI sub-agent config + 21+ skills |
-| `functions/src/index.ts` | Firebase Cloud Function proxying `/api/*` → VPS `168.231.78.113:4200` |
+| `functions/src/index.ts` | Firebase Cloud Function proxying `/api/*` → VPS `168.231.78.113:4300` |
 | `docs/*.mmd` | Architecture / auth / tool-call flow diagrams |
 | `.agents/types/` | Codebuff agent TypeScript type definitions |
+| `public/beatrice-local-daemon.mjs` | Local daemon (terminal, OpenCode, Ollama setup) on `127.0.0.1:55420` |
 
 ## Environment Variables
 
 Required: `EBURON_CORE_KEY`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` (or `VITE_SUPABASE_ANON_KEY`), `VITE_FIREBASE_*`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
-Optional: `CEREBRAS_API_KEY`, `OLLAMA_BASE_URL`, `OPENCODE_PATH`, `WORKSPACE_DATA_DIR`, `BEATRICE_WORKSPACE_DIR`, `BEATRICE_PUBLIC_URL`, `VITE_BACKEND_URL`, `VITE_SANDBOX_URL`, `WHATSAPP_CLOUD_PHONE_NUMBER_ID`, `WHATSAPP_CLOUD_ACCESS_TOKEN`, `WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID`, `WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN`, `PORT` (default 4200), `DISABLE_HMR` (default `true`).
+Optional: `CEREBRAS_API_KEY`, `OLLAMA_BASE_URL`, `OPENCODE_PATH`, `WORKSPACE_DATA_DIR`, `BEATRICE_WORKSPACE_DIR`, `BEATRICE_PUBLIC_URL`, `VITE_BACKEND_URL`, `VITE_SANDBOX_URL`, `VITE_APP_URL`, `WHATSAPP_CLOUD_PHONE_NUMBER_ID`, `WHATSAPP_CLOUD_ACCESS_TOKEN`, `WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID`, `WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN`, `PORT` (default `4300`), `SANDBOX_PORT` (default `4300`), `DISABLE_HMR` (default `true`), `OPENCODE_ZEN_FREE_MODELS` (comma-separated Zen fallback chain), `OPEN_TERMINAL_FALLBACK_MODEL` (last-resort Ollama model).
 
 The legacy upstream SDK key name is also accepted by `vite.config.ts` as a fallback. Full template: `.env.example`.
 
 ## Deployment
 
-- **VPS production**: PM2 (`voxx-backend`) + Docker compose (`docker-compose.whatsapp.yml`), behind NGINX/Traefik + Let's Encrypt on `whatsapp.eburon.ai`.
+- **VPS production**: PM2 (`voxx-backend`, runs in `/opt/beatrice` on port `:4300`) + Docker compose (`docker-compose.whatsapp.yml`), behind NGINX/Traefik + Let's Encrypt on `https://beatrice.eburon.ai`.
 - **Self-host installer**: `bootstrap.sh` / `install.sh` / `install.ps1` produce a systemd service + `/data/{baileys,wa-media,workspace,beatrice-workspace}` dirs.
-- **Dokploy alt**: `docker-compose.dokploy.yml` (runs from source, no pre-build).
-- **Firebase Hosting**: Static only; `/api/*` rewrites to Cloud Function → VPS.
+- **Dokploy alt**: `docker-compose.dokploy.yml` (runs from source, no pre-build; health check `:4300/api/health`).
+- **Firebase Hosting**: Static only; `/api/*` rewrites to Cloud Function (`functions/src/index.ts`) → VPS `168.231.78.113:4300`.
 - **Vercel/Render**: SPA shell only (`vercel.json`, `render.yaml`).
+- **Electron desktop**: `electron/main.cjs` loads `https://beatrice.eburon.ai` in packaged mode; platform installers via `electron-builder` (mac/linux/win, see `npm run electron:build:*`).
 - **APK**: Bubblewrap TWA via `.github/workflows/android-distribution.yml`.
 
 ## Useful Commands
@@ -176,6 +182,7 @@ The legacy upstream SDK key name is also accepted by `vite.config.ts` as a fallb
 npm run smoke:whatsapp              # hits /api/health, /api/eburon/provider, /api/workspace/list
 npm run db:start / db:stop         # local Supabase
 npm run check:eburon-branding      # branding CI check (tokens + regex)
+npm run electron:dev               # build + launch Electron app
 npm --prefix functions run build   # build Firebase function
 git status --short                 # see changed files (server/db/, server/index.ts, src/components/* are common-edit areas)
 ```

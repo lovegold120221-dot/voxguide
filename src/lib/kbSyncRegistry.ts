@@ -45,6 +45,14 @@ export interface UserLocalFolderState {
   entries: LocalFolderEntry[];
   /** ms epoch — when was the snapshot last filled in */
   lastScannedAt: number;
+  /** Absolute path returned by the daemon's native picker (e.g. "/Users/x/Projects/foo"). */
+  absolutePath?: string;
+  /** Whether the user granted terminal access inside the selected folder. */
+  terminalGranted?: boolean;
+  /** Whether the user granted whole-computer terminal access. */
+  wholeComputerGranted?: boolean;
+  /** ms epoch — when the user last toggled any grant (for UI badges). */
+  lastGrantAt?: number;
 }
 
 // ── DB open ──

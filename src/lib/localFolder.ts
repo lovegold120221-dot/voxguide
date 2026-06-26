@@ -211,6 +211,35 @@ export async function setIgnorePatterns(userId: string, patterns: string[]): Pro
   await saveState(st);
 }
 
+// ── Path + grants persistence (used by the LocalTerminalPanel) ──
+//
+// The browser's File System Access API does NOT expose the absolute
+// macOS path of a picked folder. We bridge that gap by also capturing
+// the path returned by the daemon's /select-folder native picker (or
+// POST /validate-path). Terminal execution / OpenCode / Ollama then
+// operate on that absolute path — not on the (path-less) FileSystem
+// DirectoryHandle.
+
+export async function setAbsolutePath(userId: string, absolutePath: string): Promise<void> {
+  const st = await loadState(userId);
+  if (!st) throw new Error('NO_HANDLE');
+  st.absolutePath = absolutePath;
+  st.lastGrantAt = Date.now();
+  await saveState(st);
+}
+
+export async function setTerminalGrant(
+  userId: string,
+  opts: { folderTerminal?: boolean; wholeComputer?: boolean },
+): Promise<void> {
+  const st = await loadState(userId);
+  if (!st) throw new Error('NO_HANDLE');
+  if (typeof opts.folderTerminal === 'boolean') st.terminalGranted = opts.folderTerminal;
+  if (typeof opts.wholeComputer === 'boolean') st.wholeComputerGranted = opts.wholeComputer;
+  st.lastGrantAt = Date.now();
+  await saveState(st);
+}
+
 // ── Walking ──
 
 interface RawEntry {
