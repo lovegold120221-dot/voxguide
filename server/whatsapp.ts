@@ -147,7 +147,7 @@ const MAX_MESSAGES = 50000;
 
 const PERSIST_MESSAGES = 20000;
 const MEDIA_CACHE_ROOT = process.env.WA_MEDIA_CACHE_DIR || '/data/wa-media';
-const PUBLIC_MEDIA_URL = process.env.BEATRICE_PUBLIC_URL || 'https://beatrice.eburon.ai';
+const PUBLIC_MEDIA_URL = process.env.BEATRICE_PUBLIC_URL || 'https://whatsapp.eburon.ai';
 const logger = P({ level: process.env.WA_LOG_LEVEL || 'silent' });
 
 function ensureDir(dir: string) {

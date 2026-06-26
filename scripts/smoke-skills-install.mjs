@@ -3,7 +3,7 @@
  * Beatrice Skills Installer — Smoke Test
  *
  * Hits `/api/skills/{caps,install}` against a running Beatrice backend
- * (default `http://127.0.0.1:4300`, override with `SMOKE_URL=https://beatrice.eburon.ai`)
+ * (default `http://127.0.0.1:4300`, override with `SMOKE_URL=https://whatsapp.eburon.ai`)
  * and verifies:
  *
  *   1. `GET  /api/skills/caps` returns the expected shape and allowlist.
@@ -24,7 +24,7 @@
  *
  * Sample usage:
  *   npm run smoke:skills-install
- *   SMOKE_URL=https://beatrice.eburon.ai npm run smoke:skills-install
+ *   SMOKE_URL=https://whatsapp.eburon.ai npm run smoke:skills-install
  *   SMOKE_SKIP_INSTALL=1 npm run smoke:skills-install              # caps + 400 only
  *   SMOKE_VERIFY_DISK=1 SMOKE_URL=http://127.0.0.1:4300 npm run smoke:skills-install
  */

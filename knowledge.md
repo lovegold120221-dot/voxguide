@@ -1,6 +1,6 @@
 # Beatrice — Project Knowledge
 
-Real-time voice AI agent by Eburon AI (Belgian market focus). Live at `https://beatrice.eburon.ai`. Code lives in `/opt/beatrice`.
+Real-time voice AI agent by Eburon AI (Belgian market focus). Live at `https://whatsapp.eburon.ai`. Code lives in `/opt/beatrice`.
 
 ## Quickstart
 
@@ -137,7 +137,7 @@ Data
 | `src/constants.ts` | Shared `LANGUAGES` array (147 entries) |
 | `src/version.ts` | `APP_VERSION`, `APP_BUILD` for PWA updates |
 | `vite.config.ts` | Reads env (incl. legacy fallback for upstream SDK key name), exposes via `process.env.*` `define:` |
-| `electron/main.cjs` | Electron main process (loads `PROD_URL=https://beatrice.eburon.ai` in packaged mode) |
+| `electron/main.cjs` | Electron main process (loads `PROD_URL=https://whatsapp.eburon.ai` in packaged mode) |
 | `server/index.ts` | Express entry, all routes, static serving, SPA fallback (includes `POST /api/filesystem/{read,write,list,upload}` VPS filesystem CRUD) |
 | `server/eburon-provider.ts` | **Sole** AI call wrapper (5 models, live-session token, image gen) |
 | `server/whatsapp.ts` | Baileys `WhatsAppManager` (sessions, QR, SSE, media cache) |
@@ -168,12 +168,12 @@ The legacy upstream SDK key name is also accepted by `vite.config.ts` as a fallb
 
 ## Deployment
 
-- **VPS production**: PM2 (`voxx-backend`, runs in `/opt/beatrice` on port `:4300`) + Docker compose (`docker-compose.whatsapp.yml`), behind NGINX/Traefik + Let's Encrypt on `https://beatrice.eburon.ai`.
+- **VPS production**: PM2 (`voxx-backend`, runs in `/opt/beatrice` on port `:4300`) + Docker compose (`docker-compose.whatsapp.yml`), behind NGINX/Traefik + Let's Encrypt on `https://whatsapp.eburon.ai`.
 - **Self-host installer**: `bootstrap.sh` / `install.sh` / `install.ps1` produce a systemd service + `/data/{baileys,wa-media,workspace,beatrice-workspace}` dirs.
 - **Dokploy alt**: `docker-compose.dokploy.yml` (runs from source, no pre-build; health check `:4300/api/health`).
 - **Firebase Hosting**: Static only; `/api/*` rewrites to Cloud Function (`functions/src/index.ts`) → VPS `168.231.78.113:4300`.
 - **Vercel/Render**: SPA shell only (`vercel.json`, `render.yaml`).
-- **Electron desktop**: `electron/main.cjs` loads `https://beatrice.eburon.ai` in packaged mode; platform installers via `electron-builder` (mac/linux/win, see `npm run electron:build:*`).
+- **Electron desktop**: `electron/main.cjs` loads `https://whatsapp.eburon.ai` in packaged mode; platform installers via `electron-builder` (mac/linux/win, see `npm run electron:build:*`).
 - **APK**: Bubblewrap TWA via `.github/workflows/android-distribution.yml`.
 
 ## Useful Commands

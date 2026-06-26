@@ -24,10 +24,10 @@ export function getBackendUrl(): string {
 
   if (typeof window !== 'undefined') {
     const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname) || window.location.port === '3100' || window.location.hostname.startsWith('192.168.');
-    return isLocal ? `http://${window.location.hostname}:4300` : 'https://beatrice.eburon.ai';
+    return isLocal ? `http://${window.location.hostname}:4300` : 'https://whatsapp.eburon.ai';
   }
 
-  return 'https://beatrice.eburon.ai';
+  return 'https://whatsapp.eburon.ai';
 }
 
 export function setBackendUrl(url: string): string {

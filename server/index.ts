@@ -952,7 +952,7 @@ function sliceTimeoutPerModel(userTimeout: number, modelsRemaining: number): num
 }
 
 const BEATRICE_WORKSPACE_DIR = process.env.BEATRICE_WORKSPACE_DIR || '/data/beatrice-workspace';
-const BEATRICE_PUBLIC_URL = process.env.BEATRICE_PUBLIC_URL || 'https://beatrice.eburon.ai';
+const BEATRICE_PUBLIC_URL = process.env.BEATRICE_PUBLIC_URL || 'https://whatsapp.eburon.ai';
 const SANDBOX_ARTIFACTS_DIR = path.join(BEATRICE_WORKSPACE_DIR, 'sandbox');
 
 function ensureBeatricedDir(dir: string): void {

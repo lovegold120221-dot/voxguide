@@ -689,7 +689,7 @@ IMPORTANT: When you speak about ANY of this content, use "we", "us", "our", or "
 - When asked about Orbit Meeting features, explain it as Eburon's meeting product for breaking language barriers with real-time speech recognition, translation, AI voice synthesis, video conferencing, chat, recording, glossary, and meeting history.
 
 --- OUR OTHER EBURON APPS ---
-- **Beatrice** (https://beatrice.eburon.ai) — This app! Our WhatsApp-integrated voice AI agent. Users talk to Beatrice through voice or WhatsApp chat. Features: real-time voice conversation, memory, WhatsApp integration (send/receive messages, manage contacts, groups), Belgian business tools (KBO lookup, VAT validation, Peppol e-invoicing, tax calculator, itsme guide, NMBS mobility), document/workspace generation, browser automation, knowledge base personalization, PWA installable.
+- **Beatrice** (https://whatsapp.eburon.ai) — This app! Our WhatsApp-integrated voice AI agent. Users talk to Beatrice through voice or WhatsApp chat. Features: real-time voice conversation, memory, WhatsApp integration (send/receive messages, manage contacts, groups), Belgian business tools (KBO lookup, VAT validation, Peppol e-invoicing, tax calculator, itsme guide, NMBS mobility), document/workspace generation, browser automation, knowledge base personalization, PWA installable.
 - **Eburon Hub** — Master E's flagship project. A centralized platform for managing Eburon voice agents, models, deployments, API keys, usage analytics, and team access. The operational dashboard for the entire Eburon ecosystem.
 - **PersonaLive** — Master E's cross-platform live speech translation app built with Electron + React. Runs locally with WebGPU inference for real-time speech translation without cloud dependencies. Supports multiple languages with offline capability.
 - **Eburon Pro Vision** — Our specialized multimodal AI model for the Belgian public sector. Trilingual OCR for Dutch, French, and German. Handles official government documents, identity cards, permits, and forms with high accuracy.
@@ -1198,7 +1198,7 @@ export function BeatriceAgent({
       const cmd = 'xattr -d com.apple.quarantine ~/Downloads/beatrice-daemon.command 2>/dev/null; chmod +x ~/Downloads/beatrice-daemon.command; ~/Downloads/beatrice-daemon.command';
       try { await navigator.clipboard.writeText(cmd); } catch {}
       // Also download the file
-      const macScript = `#!/bin/bash\n\nif ! command -v node &> /dev/null; then\n  echo "Node.js is required. Installing via Homebrew..."\n  if command -v brew &> /dev/null; then brew install node 2>/dev/null; fi\n  if ! command -v node &> /dev/null; then\n    echo "Please install Node.js 22+ from https://nodejs.org"\n    read -p "Press Enter to close..."\n    exit 1\n  fi\nfi\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://beatrice.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\necho "Starting Beatrice Local Daemon..."\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
+      const macScript = `#!/bin/bash\n\nif ! command -v node &> /dev/null; then\n  echo "Node.js is required. Installing via Homebrew..."\n  if command -v brew &> /dev/null; then brew install node 2>/dev/null; fi\n  if ! command -v node &> /dev/null; then\n    echo "Please install Node.js 22+ from https://nodejs.org"\n    read -p "Press Enter to close..."\n    exit 1\n  fi\nfi\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\necho "Starting Beatrice Local Daemon..."\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
       const blob = new Blob([macScript], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -1218,8 +1218,8 @@ export function BeatriceAgent({
     const filename = `beatrice-daemon${ext}`;
 
     const script = isWin
-      ? `@echo off\ncd /d %USERPROFILE%\\Downloads\nif not exist beatrice-local-daemon.mjs (\n  curl -sS -o beatrice-local-daemon.mjs https://beatrice.eburon.ai/beatrice-local-daemon.mjs\n)\nnode beatrice-local-daemon.mjs\npause\n`
-      : `#!/usr/bin/env bash\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://beatrice.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
+      ? `@echo off\ncd /d %USERPROFILE%\\Downloads\nif not exist beatrice-local-daemon.mjs (\n  curl -sS -o beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\n)\nnode beatrice-local-daemon.mjs\npause\n`
+      : `#!/usr/bin/env bash\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
 
     const blob = new Blob([script], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
@@ -3050,7 +3050,7 @@ I have a comprehensive set of skills at my disposal. Every task the user gives m
 - For 3D apps, games, and visualizations: use Three.js loaded from CDN
 - Generated apps are served live at a unique URL immediately
 - I can also run terminal commands, manage files, install packages, run git operations, and automate workflows
-- **App URL pattern:** https://beatrice.eburon.ai/beatrice-workspace/{safe-user-id}/{appName}/
+- **App URL pattern:** https://whatsapp.eburon.ai/beatrice-workspace/{safe-user-id}/{appName}/
 - Trigger: "build me an app", "create a website", "make a tool", "run this command", "write a script", "automate this"
 
 **LOCAL FILESYSTEM SKILLS** -- Browse, read, and write files on the user's local computer
@@ -3883,7 +3883,7 @@ ${historyContext}
                     type: Type.OBJECT,
                     properties: {
                       task: { type: Type.STRING, description: "Precise terminal task to perform. Include expected output or constraints. For app generation, include the full path where files should be saved." },
-                      appName: { type: Type.STRING, description: "Short URL-safe name for the generated app (e.g. 'todo-list', 'calculator'). Required when building apps. The app will be served live at https://beatrice.eburon.ai/beatrice-workspace/{userId}/{appName}/." },
+                      appName: { type: Type.STRING, description: "Short URL-safe name for the generated app (e.g. 'todo-list', 'calculator'). Required when building apps. The app will be served live at https://whatsapp.eburon.ai/beatrice-workspace/{userId}/{appName}/." },
                       skill: { type: Type.STRING, description: "Optional skill specialization to request." },
                       timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (10-300, default 60)." },
                       model: { type: Type.STRING, description: "OpenCode model to use (e.g. 'zenn-ai-large-free', 'deepseek-v4-flash-free'). Default: 'zenn-ai-large-free'. Use when you need to select a specific model instead of the default." }
