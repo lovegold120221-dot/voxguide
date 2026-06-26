@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.0.1';
+export const APP_VERSION = '1.0.2';
 export const APP_BUILD = 1;
 
 export const VERSION_KEY = 'beatrice_app_version';

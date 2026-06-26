@@ -24,6 +24,7 @@ import { WhatsAppManager } from './whatsapp';
 import * as waTools from './whatsapp-tools';
 import * as belgianTools from './belgian-tools';
 import { saveOutput as wsSave, listOutputs as wsList, deleteOutput as wsDelete } from './db/workspace-storage';
+import { CodingAgentRunner } from './coding-agent-runner';
 // ── Startup validation ──
 const eburonWarnings = validateEburonConfig();
 if (eburonWarnings.length > 0 && process.env.NODE_ENV !== 'production') {
@@ -1156,6 +1157,42 @@ async function runOpenTerminalOllamaFallback(params: {
   }
 }
 
+async function runOpenTerminalCerebrasFallback(params: {
+  task: string;
+  skill?: string;
+  timeout: number;
+  appName?: string;
+  workspacePath?: string;
+  appUrl?: string;
+}, primary: OpenTerminalResult): Promise<OpenTerminalResult> {
+  const system = [
+    'You are Eburon Sandbox, the Cerebras-powered fallback coding agent for Beatrice open-terminal skills.',
+    'Complete the requested repository, coding, or terminal-oriented task as well as possible.',
+    'Return the output, code, or result the user would expect from a terminal-based sub-agent.',
+    'Be concise and direct. If terminal execution would be required but is unavailable, provide the best alternative.',
+  ].join('\n');
+
+  try {
+    const result = await callCerebras(system, params.task, Math.min(params.timeout, 180), 4096);
+    const content = result.content.trim();
+    if (!content) throw new Error('Cerebras returned an empty response');
+    return {
+      ok: true,
+      stdout: `${content}\n`,
+      stderr: '',
+      exitCode: null,
+      timedOut: false,
+      truncated: false,
+      fallback: true,
+    };
+  } catch (err: any) {
+    return {
+      ...primary,
+      error: `Cerebras fallback also failed: ${err.message || String(err)}`,
+    };
+  }
+}
+
 async function runOpenTerminalWithFallback(params: {
   task: string;
   skill?: string;
@@ -1183,25 +1220,23 @@ async function runOpenTerminalWithFallback(params: {
     console.warn(`[OpenCode Zen] ${model} out of tokens. Swapping to next free model...`);
   }
 
-  // 2. All Zen free models exhausted (or non-quota error). Last resort:
-  //    local Ollama fallback model. Synthesize a `primary` when none was tried
-  //    so the error message reflects reality (“…no Zen model was attempted…”).
-  const primary: OpenTerminalResult = lastZenResult ?? {
-    ok: false,
-    stdout: '',
-    stderr: '',
-    exitCode: null,
-    timedOut: false,
-    truncated: false,
+  // 2. All Zen free models exhausted. Try Cerebras as a coding fallback agent.
+  setTaskProgress('terminal_fallback', 'running', { agent: 'cerebras', message: 'OpenCode models exhausted, falling back to Cerebras coding agent' });
+  const cerebrasResult = await runOpenTerminalCerebrasFallback(params, lastZenResult ?? {
+    ok: false, stdout: '', stderr: '', exitCode: null, timedOut: false, truncated: false,
     error: 'No OpenCode Zen model was attempted (empty chain).',
-  };
-  const fallback = await runOpenTerminalOllamaFallback(params, primary);
-  if (fallback.ok) return fallback;
+  });
+  if (cerebrasResult.ok) return cerebrasResult;
 
-  // 3. Everything failed — surface which models we tried for diagnostics.
+  // 3. Cerebras also failed. Last resort: local Eburon Ollama models.
+  setTaskProgress('terminal_fallback', 'running', { agent: 'eburon_ollama', message: 'Cerebras failed, trying local Eburon Ollama models' });
+  const ollamaFallback = await runOpenTerminalOllamaFallback(params, cerebrasResult);
+  if (ollamaFallback.ok) return ollamaFallback;
+
+  // 4. Everything failed — surface which models we tried for diagnostics.
   return {
-    ...fallback,
-    error: (fallback.error || 'All OpenCode Zen free models exhausted') +
+    ...ollamaFallback,
+    error: (ollamaFallback.error || 'All models exhausted (OpenCode Zen + Cerebras + local Ollama)') +
       (triedModels.length > 0 ? ` (tried: ${triedModels.join(', ')})` : ''),
   };
 }
@@ -1261,6 +1296,104 @@ app.post('/api/terminal/open-skills', async (req, res) => {
       error: err.message?.slice(0, 500) || 'Terminal task execution failed',
     });
   }
+});
+
+// ── Coding Agent Runner (generic multi-provider, server-side only) ──
+// Replaces hardcoded OpenCode logic with a pluggable provider system.
+// Providers (opencode, gemini, freebuff, codebuff) are never exposed to the frontend.
+
+const codingAgentRunner = new CodingAgentRunner({
+  allowedRoot: OPEN_TERMINAL_WORKDIR,
+  callOllama: (model, system, prompt, timeout, maxTokens) =>
+    callOllama(model, system, prompt, timeout, maxTokens),
+  callCerebras: (system, prompt, timeout, maxTokens) =>
+    callCerebras(system, prompt, timeout, maxTokens),
+});
+
+/**
+ * POST /api/coding-agent/run
+ * Unified backend endpoint for all coding/terminal task execution.
+ * Provider selection is server-side only — the frontend never sees which
+ * provider, CLI, model, or backend tool is used.
+ */
+app.post('/api/coding-agent/run', async (req, res) => {
+  try {
+    const { agent, taskPrompt, cwd, model, scope, timeout, permissionMode, userId, appName, skill } = req.body || {};
+
+    const safeTask = String(taskPrompt || '').trim();
+    if (!safeTask) {
+      res.status(400).json({ ok: false, error: 'task is required' });
+      return;
+    }
+
+    const safeAppName = String(appName || '').trim();
+    const safeUserId = String(userId || '').trim();
+    const workspacePath = safeAppName && safeUserId ? buildWorkspacePath(safeUserId, safeAppName) : undefined;
+    const appUrl = safeAppName && safeUserId ? buildAppUrl(safeUserId, safeAppName) : undefined;
+
+    const result = await codingAgentRunner.run({
+      agent,
+      taskPrompt: safeTask,
+      cwd: cwd || OPEN_TERMINAL_WORKDIR,
+      model,
+      scope,
+      timeout,
+      permissionMode,
+      appName: safeAppName || undefined,
+      workspacePath,
+      appUrl,
+      skill,
+    });
+
+    const resolvedAppUrl = (safeAppName && safeUserId && workspacePath && fs.existsSync(path.join(workspacePath, 'index.html')))
+      ? appUrl
+      : undefined;
+
+    // Strip internal provider info from response — never expose to frontend
+    const { _provider, _model, ...frontendSafe } = result;
+
+    // Always sanitize stderr — even on success, CLI tools emit skill conflict
+    // warnings, auth messages, and internal diagnostics that must never reach
+    // the frontend. Clear it entirely; the stdout has the actual result.
+    frontendSafe.stderr = '';
+
+    // On failure, sanitize all output — never leak provider details or
+    // internal error messages to the frontend. Show user-friendly error only.
+    if (!frontendSafe.ok) {
+      res.json({
+        ok: false,
+        stdout: '',
+        stderr: '',
+        exitCode: frontendSafe.exitCode ?? null,
+        timedOut: frontendSafe.timedOut ?? false,
+        truncated: false,
+        error: 'The workspace assistant could not complete the task.',
+        appUrl: resolvedAppUrl,
+        appWorkspace: workspacePath,
+      });
+    } else {
+      res.json({
+        ...frontendSafe,
+        appUrl: resolvedAppUrl,
+        appWorkspace: workspacePath,
+      });
+    }
+  } catch (err: any) {
+    console.error('[CodingAgent] error:', err.message?.slice(0, 200));
+    // User-friendly error only — never reveal provider details
+    res.status(500).json({
+      ok: false,
+      error: 'The workspace assistant could not complete the task.',
+    });
+  }
+});
+
+/**
+ * GET /api/coding-agent/status
+ * Internal diagnostics only — never exposed to end users.
+ */
+app.get('/api/coding-agent/status', (_req, res) => {
+  res.json(codingAgentRunner.status());
 });
 
 async function callOllama(model: string, systemPrompt: string, userPrompt: string, timeoutSec: number, maxTokens = 256): Promise<{ content: string; model: string }> {

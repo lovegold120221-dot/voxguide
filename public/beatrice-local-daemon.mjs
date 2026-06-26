@@ -27,6 +27,216 @@ const HOME = homedir();
 const OS = platform(); // 'linux' | 'darwin' | 'win32'
 const OLLAMA_MODEL = 'media-pipe/eburon-sandbox-worker';
 
+// ── Coding Agent Provider Config (server-side only, never exposed to frontend) ──
+const CODING_AGENT_DEFAULT = process.env.CODING_AGENT_DEFAULT || 'opencode';
+// Freebuff & Codebuff are the same tool (CodebuffAI) — share one binary path.
+const FREEBUFF_BINARY = process.env.FREEBUFF_PATH || process.env.CODEBUFF_PATH || 'freebuff';
+const PROVIDER_PATHS = {
+  opencode: process.env.OPENCODE_PATH || 'opencode',
+  gemini:   process.env.GEMINI_CLI_PATH || 'gemini',
+  freebuff: FREEBUFF_BINARY,
+  codebuff: FREEBUFF_BINARY,
+};
+const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/zenn-ai-large-free';
+const OPENCODE_FALLBACK_MODEL = process.env.OPENCODE_FALLBACK_MODEL || 'opencode/deepseek-v4-flash-free';
+const OPENCODE_ZEN_CHAIN = (process.env.OPENCODE_ZEN_FREE_MODELS || [
+  OPENCODE_MODEL,
+  OPENCODE_FALLBACK_MODEL,
+  'opencode/big-pickle',
+  'opencode/north-mini-code-free',
+  'opencode/mimo-v2.5-free',
+  'opencode/nemotron-3-ultra-free',
+].join(',')).split(',').map(s => s.trim()).filter(Boolean);
+
+const QUOTA_PATTERNS = [
+  /\b429\b/, /\b402\b/, /rate[-_ ]?limit/i, /quota/i, /usage[-_ ]?limit/i,
+  /out[-_ ]?of[-_ ]?tokens/i, /resource[-_ ]?exhaust/i, /too many requests/i,
+];
+
+function isQuotaError(stderr, stdout) {
+  const combined = `${stderr || ''}\n${stdout || ''}`;
+  return QUOTA_PATTERNS.some(p => p.test(combined));
+}
+
+const SECRET_PATTERNS = [
+  /(?:sk|pk|rk)-[a-zA-Z0-9]{20,}/g,
+  /ya29\.[a-zA-Z0-9_-]{20,}/g,
+  /ghp_[a-zA-Z0-9]{36,}/g,
+  /Bearer\s+[a-zA-Z0-9._-]{20,}/gi,
+  /AIza[a-zA-Z0-9_-]{35}/g,
+];
+
+function redactSecrets(text) {
+  let result = text;
+  for (const pattern of SECRET_PATTERNS) {
+    result = result.replace(pattern, '[REDACTED]');
+  }
+  return result;
+}
+
+const DESTRUCTIVE_PATTERNS = [
+  /(^|\s)(rm\s+-rf\s+\/|sudo\s+rm\s+-rf|mkfs\.|dd\s+if=\/dev\/)/i,
+  /:\(\)\s*\{\s*:\|:&\s*\};:/,
+];
+
+function isDestructiveCommand(cmd) {
+  return DESTRUCTIVE_PATTERNS.some(p => p.test(cmd));
+}
+
+function checkProviderAvailable(provider) {
+  const binPath = PROVIDER_PATHS[provider] || provider;
+  try {
+    const which = execSync(`which "${binPath}" 2>/dev/null || command -v "${binPath}" 2>/dev/null || echo ""`, { encoding: 'utf8', timeout: 5_000 }).trim();
+    if (!which && !existsSync(binPath)) return { available: false, path: binPath, version: null };
+    const ver = execSync(`"${binPath}" --version 2>&1 || echo "unknown"`, { encoding: 'utf8', timeout: 10_000 }).trim();
+    return { available: true, path: binPath, version: ver || 'unknown' };
+  } catch {
+    return { available: false, path: binPath, version: null };
+  }
+}
+
+function getCodingAgentStatus() {
+  const providers = {};
+  for (const p of ['opencode', 'gemini', 'freebuff', 'codebuff']) {
+    providers[p] = checkProviderAvailable(p);
+  }
+  return {
+    ok: true,
+    defaultProvider: CODING_AGENT_DEFAULT,
+    providers,
+  };
+}
+
+function sliceTimeoutPerModel(userTimeout, modelsRemaining) {
+  return Math.max(15, Math.floor(userTimeout / Math.max(1, modelsRemaining)));
+}
+
+async function runCodingAgentTask(params) {
+  const { agent, taskPrompt, cwd, model, scope, timeout, permissionMode } = params;
+  const safeTimeout = Math.min(Math.max(Number(timeout) || 60, 10), 300);
+  const safePrompt = String(taskPrompt || '').trim();
+  if (!safePrompt) return { ok: false, error: 'Task is required.' };
+
+  if (permissionMode === 'sandbox' && isDestructiveCommand(safePrompt)) {
+    return { ok: false, error: 'Command blocked for safety.' };
+  }
+
+  const workCwd = resolve(cwd || HOME);
+  const provider = agent || CODING_AGENT_DEFAULT;
+
+  if (provider === 'gemini') {
+    const geminiResult = await runGeminiProvider(safePrompt, workCwd, model, safeTimeout);
+    if (geminiResult.ok) return geminiResult;
+    // Gemini failed — fall back to opencode chain
+    return runOpenCodeChain(safePrompt, workCwd, model, safeTimeout, params);
+  } else if (provider === 'freebuff' || provider === 'codebuff') {
+    // Freebuff/Codebuff (CodebuffAI) — pipe prompt via stdin for headless execution
+    const freebuffResult = await runFreebuffProvider(safePrompt, workCwd, safeTimeout, provider);
+    if (freebuffResult.ok) return freebuffResult;
+    // Freebuff failed — fall back to opencode chain
+    return runOpenCodeChain(safePrompt, workCwd, model, safeTimeout, params);
+  }
+
+  // Default: opencode with Zen model swap chain
+  return runOpenCodeChain(safePrompt, workCwd, model, safeTimeout, params);
+}
+
+async function runGeminiProvider(prompt, cwd, model, timeout) {
+  const binPath = PROVIDER_PATHS.gemini;
+  // Gemini CLI headless flags (geminicli.com/docs/cli/cli-reference):
+  //   -p <prompt>          → non-interactive prompt
+  //   --approval-mode yolo → auto-approve all actions
+  //   --skip-trust         → skip folder trust check
+  //   -m <model>           → model (aliases: auto, pro, flash, flash-lite)
+  //   -o text              → text output format
+  const args = ['-p', prompt, '--approval-mode', 'yolo', '--skip-trust', '-o', 'text'];
+  if (model) args.push('-m', model);
+  return new Promise((resolveFn) => {
+    const child = exec(`"${binPath}" ${args.map(a => `"${a}"`).join(' ')}`, {
+      cwd, timeout: timeout * 1000, maxBuffer: 24 * 1024 * 1024, shell: true,
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+    }, (error, stdout, stderr) => {
+      const ok = !error || (error.code === 0);
+      resolveFn({
+        ok,
+        stdout: redactSecrets((stdout || '').slice(0, 24000)),
+        stderr: redactSecrets((stderr || '').slice(0, 24000)),
+        exitCode: error?.code || 0,
+        timedOut: error?.killed || false,
+        truncated: (stdout || '').length > 24000,
+        error: ok ? undefined : 'The workspace assistant could not complete the task.',
+      });
+    });
+  });
+}
+
+async function runFreebuffProvider(prompt, cwd, timeout, provider) {
+  // Freebuff/Codebuff CLI is interactive-only (TUI) — no headless mode.
+  // If @codebuff/sdk is installed + CODEBUFF_API_KEY is set, use the SDK.
+  // Otherwise, immediately return failure so the fallback chain kicks in.
+  const codebuffApiKey = process.env.CODEBUFF_API_KEY;
+  if (codebuffApiKey) {
+    try {
+      const { CodebuffClient } = await import('@codebuff/sdk');
+      const client = new CodebuffClient({ apiKey: codebuffApiKey, cwd });
+      const result = await Promise.race([
+        client.run({ agent: 'base', prompt }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeout * 1000)),
+      ]);
+      const content = typeof result === 'string' ? result : result?.output || result?.text || JSON.stringify(result);
+      return { ok: true, stdout: redactSecrets(String(content)), stderr: '', exitCode: 0, timedOut: false, truncated: String(content).length > 24000 };
+    } catch (err) {
+      console.warn(`[CodingAgent] @codebuff/sdk failed: ${err.message?.slice(0, 100)}`);
+    }
+  }
+  // No SDK — CLI is interactive-only, can't run headless. Fall back immediately.
+  console.warn(`[CodingAgent] ${provider} CLI is interactive-only (no headless mode). Falling back.`);
+  return { ok: false, stdout: '', stderr: '', exitCode: null, timedOut: false, truncated: false, error: 'The workspace assistant could not complete the task.' };
+}
+
+async function runOpenCodeChain(prompt, cwd, modelOverride, timeout, params) {
+  const chain = OPENCODE_ZEN_CHAIN.length > 0 ? OPENCODE_ZEN_CHAIN : [OPENCODE_MODEL];
+  let lastResult = null;
+
+  for (let i = 0; i < chain.length; i++) {
+    const model = modelOverride || chain[i];
+    const perModelTimeout = sliceTimeoutPerModel(timeout, chain.length - i);
+    const binPath = PROVIDER_PATHS.opencode;
+    const args = ['run', '--model', model, '--dir', cwd, '--dangerously-skip-permissions', prompt];
+
+    try {
+      const result = await new Promise((resolveFn) => {
+        const child = exec(`"${binPath}" ${args.map(a => `"${a}"`).join(' ')}`, {
+          cwd, timeout: perModelTimeout * 1000, maxBuffer: 24 * 1024 * 1024, shell: true,
+          env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+        }, (error, stdout, stderr) => {
+          const ok = !error || (error.code === 0);
+          resolveFn({
+            ok,
+            stdout: redactSecrets((stdout || '').slice(0, 24000)),
+            stderr: redactSecrets((stderr || '').slice(0, 24000)),
+            exitCode: error?.code || 0,
+            timedOut: error?.killed || false,
+            truncated: (stdout || '').length > 24000,
+            error: ok ? undefined : 'The workspace assistant could not complete the task.',
+          });
+        });
+      });
+
+      if (result.ok) return result;
+      lastResult = result;
+      if (!isQuotaError(result.stderr, result.stdout)) break;
+      console.warn(`[CodingAgent] Model ${model} exhausted — swapping to next.`);
+    } catch (err) {
+      console.warn(`[CodingAgent] Model ${model} failed: ${err.message?.slice(0, 100)}`);
+      lastResult = { ok: false, stdout: '', stderr: '', exitCode: null, timedOut: false, truncated: false, error: 'The workspace assistant could not complete the task.' };
+      break;
+    }
+  }
+
+  return lastResult || { ok: false, error: 'The workspace assistant could not complete the task.' };
+}
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -455,6 +665,42 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── GET /coding-agent/status ── (internal diagnostics only)
+  if (req.method === 'GET' && url.pathname === '/coding-agent/status') {
+    json(res, 200, getCodingAgentStatus());
+    return;
+  }
+
+  // ── POST /coding-agent/run ── (unified provider endpoint, replaces /opencode/run)
+  if (req.method === 'POST' && url.pathname === '/coding-agent/run') {
+    const body = await readBody(req);
+    if (!body.taskPrompt || typeof body.taskPrompt !== 'string') {
+      json(res, 400, { ok: false, error: 'taskPrompt is required' });
+      return;
+    }
+    try {
+      const result = await runCodingAgentTask({
+        agent: body.agent,
+        taskPrompt: body.taskPrompt,
+        cwd: body.cwd || HOME,
+        model: body.model,
+        scope: body.scope,
+        timeout: body.timeout || 60,
+        permissionMode: body.permissionMode || 'trusted',
+        appName: body.appName,
+        workspacePath: body.workspacePath,
+        appUrl: body.appUrl,
+        skill: body.skill,
+      });
+      // Strip any internal provider info — never expose to frontend
+      const { _provider, _model, ...safe } = result;
+      json(res, 200, safe);
+    } catch (e) {
+      json(res, 500, { ok: false, error: 'The workspace assistant could not complete the task.' });
+    }
+    return;
+  }
+
   // ── POST /run ──
   if (req.method === 'POST' && url.pathname === '/run') {
     const body = await readBody(req);
@@ -498,6 +744,8 @@ server.listen(PORT, '127.0.0.1', () => {
   process.stdout.write(`  GET  /ollama-models    — list pulled models\n`);
   process.stdout.write(`  POST /pull-model       — pull an Ollama model\n`);
   process.stdout.write(`  POST /configure-opencode — set OpenCode to use Ollama model + Zen fallbacks\n`);
+  process.stdout.write(`  POST /coding-agent/run — unified coding agent execution (replaces /opencode/run)\n`);
+  process.stdout.write(`  GET  /coding-agent/status — internal provider diagnostics\n`);
   process.stdout.write(`  POST /run              — execute terminal command\n`);
   process.stdout.write(`  GET  /platform         — OS details\n`);
 });

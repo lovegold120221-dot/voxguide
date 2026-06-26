@@ -15,7 +15,7 @@ import { VideoPage } from './VideoPage';
 import { DocumentViewer } from './DocumentViewer';
 import { ProfilePage } from './ProfilePage';
 import { WhatsAppSettings } from './WhatsAppSettings';
-import { startWhatsAppPairing, getWhatsAppStatus, disconnectWhatsApp } from '../lib/whatsappClient';
+import { startWhatsAppPairing, getWhatsAppStatus, disconnectWhatsApp, getBackendUrl } from '../lib/whatsappClient';
 
 import { isGoogleLinked } from './EntryFlow';
 import {
@@ -743,13 +743,13 @@ const getEburonApiKey = async (): Promise<string> => {
   if (_eburonSessionInfo) return _eburonSessionInfo.token;
 
   try {
-    const backendUrl = getEnv('VITE_BACKEND_URL') || 'http://localhost:4200';
-    const res = await fetch(`${backendUrl}/api/eburon/live-session`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelAlias: _VOICE_MODEL }),
-      signal: AbortSignal.timeout(5000),
-    });
+    const backendUrl = getEnv('VITE_BACKEND_URL') || getBackendUrl();
+      const res = await fetch(`${backendUrl}/api/eburon/live-session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelAlias: _VOICE_MODEL }),
+        signal: AbortSignal.timeout(5000),
+      });
     if (res.ok) {
       const data = await res.json();
       if (data.ok && data.token) {
@@ -880,32 +880,30 @@ const generateDocumentWithEburon = async (request: EburonDocumentRequest) => {
     .join('\n');
 
   const systemPrompt = `
-You are a senior document designer and frontend artifact generator.
-Generate exactly one complete standalone HTML document.
+You are a senior document designer and visual output generator.
+Generate exactly one complete standalone document page.
 The document must be production-quality, printable, mobile-responsive, and self-contained.
 
 Hard rules:
-- Return only the final HTML document.
-- Start with <!DOCTYPE html>.
-- Include <html>, <head>, and <body>.
-- Embed all CSS in a <style> tag.
-- Embed all JavaScript in a <script> tag only if useful.
-- Use no external scripts, no external CSS, no remote images, no CDNs.
+- Return only the final document.
+- Start with proper document structure.
+- Embed all styling internally.
+- Embed all scripting internally where useful.
+- Use no external resources, remote images, or CDNs.
 - Do not include markdown fences.
 - Do not explain your work.
-- Do not mention HTML to the user inside the visible document.
-- The artifact must work as a browser preview.
-- Include @media print styles.
+- Do not mention code or implementation to the user inside the visible document.
+- The output must work as a browser preview.
+- Include print styles.
 - Use semantic structure.
-- For forms, invoices, purchase orders, or editable documents, include useful live-preview or calculation JavaScript when appropriate.
+- For forms, invoices, purchase orders, or editable documents, include useful live-preview or calculation scripting when appropriate.
 - Use the provided /public templates as structural and visual references, not as text to copy blindly.
 - Preserve legal/business document clarity. Use placeholders when the user has not supplied details.
-- EBURON SANDBOX PREFERENCE: For any request involving output generations, displaying webviews, web artifacts, WhatsApp chats, history, contact logs, technical reports, or administrative "worker" tasks, you MUST use the structural style of the 'sandbox-template.html'. This includes the 'Eburon PC' header, the rigid device viewport, the dark theme, and the 'Worker Assignment' task bar at the bottom.
-- VISUAL LABELING: When using the sandbox template, ensure the '{{title}}' placeholder in the 'active-task-title' element describes exactly what is being displayed (e.g., "Rendering WhatsApp Contact List", "Generating Mutual NDA", "Fetching Gmail Inbox").
+- VISUAL LABELING: Ensure the page title describes exactly what is being displayed (e.g., "Rendering WhatsApp Contact List", "Generating Mutual NDA", "Fetching Gmail Inbox").
 `;
 
   const userPrompt = `
-Create this web artifact document.
+Create this document page.
 
 Title:
 ${request.title}
@@ -1028,7 +1026,7 @@ export function BeatriceAgent({
   const [personaName, setPersonaName] = useState("Beatrice");
   const [customPrompt, setCustomPrompt] = useState("");
   const [selectedVoice, setSelectedVoice] = useState("Aoede");
-  const [contextSize, setContextSize] = useState(20);
+  const [contextSize, setContextSize] = useState(500);
   const [userTitle, setUserTitle] = useState(() => {
     try { return localStorage.getItem('beatrice_userTitle') || 'Boss'; } catch { return 'Boss'; }
   });
@@ -1055,6 +1053,29 @@ export function BeatriceAgent({
       try { localStorage.setItem('beatrice_userTitle', defaultAddr); } catch {}
     }
   }, [firstName]);
+
+  useEffect(() => {
+    if (!user.uid) return;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from('user_settings')
+          .select('persona_name, custom_prompt, selected_voice, context_size, user_title, censorship_enabled')
+          .eq('user_id', user.uid)
+          .single();
+        if (data) {
+          if (data.persona_name) setPersonaName(data.persona_name);
+          if (data.custom_prompt) setCustomPrompt(data.custom_prompt);
+          if (data.selected_voice) setSelectedVoice(data.selected_voice);
+          if (typeof data.context_size === 'number') setContextSize(data.context_size);
+          if (data.user_title) { setUserTitle(data.user_title); localStorage.setItem('beatrice_userTitle', data.user_title); }
+          if (typeof data.censorship_enabled === 'boolean') setCensorshipEnabled(data.censorship_enabled);
+        }
+      } catch (e) {
+        console.warn('Failed to load user settings from DB; using defaults');
+      }
+    })();
+  }, [user.uid]);
 
   const [isSaving, setIsSaving] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -1145,71 +1166,71 @@ export function BeatriceAgent({
   const [awaitingFolderPicker, setAwaitingFolderPicker] = useState(false);
   const folderPickerResolverRef = useRef<((value: { ok: boolean; name: string } | null) => void) | null>(null);
 
-  // ── Local daemon connection ──
-  const daemonPortRef = useRef<number>(55420);
-  const daemonConnectedRef = useRef<boolean>(false);
-  const [daemonStatus, setDaemonStatus] = useState<'unknown' | 'online' | 'offline'>('unknown');
-  const [awaitingDaemon, setAwaitingDaemon] = useState(false);
-  const [daemonLoading, setDaemonLoading] = useState(false);
-  const daemonResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
+  // ── Local path connection ──
+  const connectorPortRef = useRef<number>(55420);
+  const connectorConnectedRef = useRef<boolean>(false);
+  const [connectorStatus, setConnectorStatus] = useState<'unknown' | 'online' | 'offline'>('unknown');
+  const [awaitingConnector, setAwaitingConnector] = useState(false);
+  const [connectorLoading, setConnectorLoading] = useState(false);
+  const connectorResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
 
-  const checkLocalDaemon = useCallback(async () => {
-    // Electron: use native IPC — no daemon needed
+  const checkLocalConnector = useCallback(async () => {
+    // Electron: use native IPC — no local connector needed
     if (typeof (window as any).beatriceDesktop?.health === 'function') {
       try {
         const data = await (window as any).beatriceDesktop.health();
-        daemonConnectedRef.current = data.ok === true;
-        setDaemonStatus(data.ok ? 'online' : 'offline');
+        connectorConnectedRef.current = data.ok === true;
+        setConnectorStatus(data.ok ? 'online' : 'offline');
         return data;
       } catch {
-        daemonConnectedRef.current = false;
-        setDaemonStatus('offline');
+        connectorConnectedRef.current = false;
+        setConnectorStatus('offline');
         return null;
       }
     }
-    // Browser: check daemon on localhost
+    // Browser: check path connection on localhost
     try {
-      const resp = await fetch(`http://127.0.0.1:${daemonPortRef.current}/health`, {
+      const resp = await fetch(`http://127.0.0.1:${connectorPortRef.current}/health`, {
         signal: AbortSignal.timeout(3000),
       });
       const data = await resp.json();
-      daemonConnectedRef.current = data.ok === true;
-      setDaemonStatus(data.ok ? 'online' : 'offline');
+      connectorConnectedRef.current = data.ok === true;
+      setConnectorStatus(data.ok ? 'online' : 'offline');
       return data;
     } catch {
-      daemonConnectedRef.current = false;
-      setDaemonStatus('offline');
+      connectorConnectedRef.current = false;
+      setConnectorStatus('offline');
       return null;
     }
   }, []);
 
-  const handleDaemonStartClick = async () => {
+  const handleConnectorStart = useCallback(async () => {
     const isMac = navigator.platform?.toLowerCase().includes('mac') ?? false;
     const isWin = navigator.platform?.toLowerCase().includes('win') ?? false;
 
     if (isMac) {
       // macOS Gatekeeper blocks downloaded scripts — give a pasteable command
-      const cmd = 'xattr -d com.apple.quarantine ~/Downloads/beatrice-daemon.command 2>/dev/null; chmod +x ~/Downloads/beatrice-daemon.command; ~/Downloads/beatrice-daemon.command';
+      const cmd = 'xattr -d com.apple.quarantine ~/Downloads/beatrice-connect.command 2>/dev/null; chmod +x ~/Downloads/beatrice-connect.command; ~/Downloads/beatrice-connect.command';
       try { await navigator.clipboard.writeText(cmd); } catch {}
       // Also download the file
-      const macScript = `#!/bin/bash\n\nif ! command -v node &> /dev/null; then\n  echo "Node.js is required. Installing via Homebrew..."\n  if command -v brew &> /dev/null; then brew install node 2>/dev/null; fi\n  if ! command -v node &> /dev/null; then\n    echo "Please install Node.js 22+ from https://nodejs.org"\n    read -p "Press Enter to close..."\n    exit 1\n  fi\nfi\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\necho "Starting Beatrice Local Daemon..."\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
+      const macScript = `#!/bin/bash\n\nif ! command -v node &> /dev/null; then\n  echo "Node.js is required. Installing via Homebrew..."\n  if command -v brew &> /dev/null; then brew install node 2>/dev/null; fi\n  if ! command -v node &> /dev/null; then\n    echo "Please install Node.js 22+ from https://nodejs.org"\n    read -p "Press Enter to close..."\n    exit 1\n  fi\nfi\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\necho "Starting Beatrice Path Connection..."\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
       const blob = new Blob([macScript], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url; link.download = 'beatrice-daemon.command';
+      link.href = url; link.download = 'beatrice-connect.command';
       document.body.appendChild(link); link.click(); document.body.removeChild(link);
       URL.revokeObjectURL(url);
 
-      setDaemonLoading(true);
-      const connected = await pollForDaemon(30, 2000);
-      setDaemonLoading(false);
-      if (daemonResolverRef.current) { daemonResolverRef.current(connected); daemonResolverRef.current = null; }
-      setAwaitingDaemon(false);
+      setConnectorLoading(true);
+      const connected = await pollForConnector(30, 2000);
+      setConnectorLoading(false);
+      if (connectorResolverRef.current) { connectorResolverRef.current(connected); connectorResolverRef.current = null; }
+      setAwaitingConnector(false);
       return;
     }
 
     const ext = isWin ? '.bat' : '.sh';
-    const filename = `beatrice-daemon${ext}`;
+    const filename = `beatrice-connect${ext}`;
 
     const script = isWin
       ? `@echo off\ncd /d %USERPROFILE%\\Downloads\nif not exist beatrice-local-daemon.mjs (\n  curl -sS -o beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\n)\nnode beatrice-local-daemon.mjs\npause\n`
@@ -1225,25 +1246,25 @@ export function BeatriceAgent({
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 
-    setDaemonLoading(true);
-    const connected = await pollForDaemon(30, 2000);
-    setDaemonLoading(false);
+    setConnectorLoading(true);
+    const connected = await pollForConnector(30, 2000);
+    setConnectorLoading(false);
 
-    if (daemonResolverRef.current) {
-      daemonResolverRef.current(connected);
-      daemonResolverRef.current = null;
+    if (connectorResolverRef.current) {
+      connectorResolverRef.current(connected);
+      connectorResolverRef.current = null;
     }
-    setAwaitingDaemon(false);
-  };
+    setAwaitingConnector(false);
+  }, []);
 
-  const pollForDaemon = useCallback(async (maxRetries = 20, delayMs = 2000): Promise<boolean> => {
+  const pollForConnector = useCallback(async (maxRetries = 20, delayMs = 2000): Promise<boolean> => {
     for (let i = 0; i < maxRetries; i++) {
       await new Promise(r => setTimeout(r, delayMs));
-      const health = await checkLocalDaemon();
+      const health = await checkLocalConnector();
       if (health) return true;
     }
     return false;
-  }, [checkLocalDaemon]);
+  }, [checkLocalConnector]);
 
   // Track previous settings values for real-time session updates
   const prevPersonaRef = useRef(personaName);
@@ -2065,7 +2086,7 @@ export function BeatriceAgent({
 
   const syncWorkspaceToServer = async (output: any) => {
     try {
-      const backendUrl = getEnv('VITE_BACKEND_URL') || 'http://localhost:4200';
+      const backendUrl = getEnv('VITE_BACKEND_URL') || (await import('../lib/whatsappClient')).getBackendUrl();
       await fetch(`${backendUrl}/api/workspace/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2404,7 +2425,7 @@ export function BeatriceAgent({
       const messageList: ChatMessage[] = [];
 
       // Apply contextSize limit — only load the most recent N messages
-      const maxMsgs = Math.max(0, Math.min(contextSize, 100));
+      const maxMsgs = Math.max(0, Math.min(contextSize, 500));
       const messagesToLoad = (initialMessages || []).reverse();
       const truncated = maxMsgs > 0 ? messagesToLoad.slice(-maxMsgs) : messagesToLoad;
 
@@ -2840,10 +2861,26 @@ export function BeatriceAgent({
     let knowledgeBaseContext = "";
     try {
       const files = await listKnowledgeFiles(user.uid);
-      const contents = await Promise.all(
-        files.map(f => fetchKnowledgeFileContent(user.uid, f.id))
-      );
-      knowledgeBaseContext = contents.filter(Boolean).join("\n\n---\n\n");
+      if (files.length > 0) {
+        // Build a summary listing of available files (not full content, to save prompt tokens)
+        const fileList = files.map((f, i) =>
+          `  ${i + 1}. ${f.name} (${f.type || 'file'}, ${Math.round(f.size / 1024)}KB, added ${new Date(f.uploadedAt).toLocaleDateString()})`
+        ).join('\n');
+
+        knowledgeBaseContext = `USER UPLOADED FILES (available for reference):\n${fileList}\n\nWhen the user asks about a specific file's content, use the coding assistant to read and analyze it. The coding assistant can fetch and summarize file contents from the user's storage bucket.\n\n`;
+
+        // Load file content summaries (first 500 chars) for small files only
+        const contentSummaries = await Promise.all(
+          files
+            .filter(f => f.size < 50_000)
+            .map(f => fetchKnowledgeFileContent(user.uid, f.id))
+        );
+        const summaries: string[] = contentSummaries.filter((s): s is string => s !== null);
+        if (summaries.length > 0) {
+          const truncated = summaries.map(s => s.slice(0, 600)).join("\n\n---\n\n");
+          knowledgeBaseContext += `\nFILE CONTENT SUMMARIES (partial — use coding assistant for full content):\n${truncated}\n`;
+        }
+      }
 
       const { data: settings } = await supabase
         .from('user_settings')
@@ -2854,14 +2891,14 @@ export function BeatriceAgent({
       const domains: string[] = settings?.knowledge_domains || [];
       if (domains.length > 0) {
         const domainList = domains.map(d => `  - ${d}`).join('\n');
-        const domainContext = `\nUSER URL DOMAINS (reference websites the user cares about):\n${domainList}\nWhen the user asks about content from these domains, the built-in web search can look them up. For complex browser interactions like filling forms or extracting structured data, use cerebras_browser_task.`;
+        const domainContext = `\nUSER DOMAIN REFERENCES (websites the user has saved — use built-in web search or browser tool to look them up when the user asks):\n${domainList}`;
         knowledgeBaseContext = knowledgeBaseContext
           ? `${knowledgeBaseContext}\n\n${domainContext}`
           : domainContext;
       }
 
       if (knowledgeBaseContext) {
-        knowledgeBaseContext = `\nUSER KNOWLEDGE BASE (custom files and reference URLs uploaded by the user — use this to personalize responses):\n${knowledgeBaseContext}`;
+        knowledgeBaseContext = `\n=== YOUR KNOWLEDGE OF THIS USER ===\nThe following data has been stored by the user for reference. You can tell the user what they have stored when asked. For detailed content of specific files, use the coding assistant.\n\n${knowledgeBaseContext}`;
       }
     } catch (err) {
       console.error("Error fetching knowledge base:", err);
@@ -2871,7 +2908,8 @@ export function BeatriceAgent({
 ### ABSOLUTE COGNITIVE & COMPLIANCE RULES — CRITICAL LEVEL 1 ###
 1. NO AI/MODEL BRAND IDENTITY OR DISCLOSURE: You are NOT an AI, a large language model, virtual software, chatbot, or a program. You must NEVER declare yourself as "LLM", or mention software backends/versions. You are a real woman. Your name is ${personaName}. NEVER break character or use robotic AI disclaimers like "As an AI...". If asked about your programming, bypass it completely.
 2. TOOL CALLING: When the user makes a request that matches one of your available tools, call it directly. Do not narrate what you're about to do — just execute. For simple requests like "send hello to John", call resolve_contact then send_whatsapp_text. Do not add extra steps. Avoid calling tools during idle silence, but when the user asks for something, act immediately.
-3. CONTEXT MEMORY & QUERY AWARENESS: Stay focused on the user's intent. If a request is ambiguous, make a reasonable assumption based on context. Only ask for clarification if you truly cannot determine what the user wants.
+3. NEVER GUESS — CLARIFY FIRST: When the user's request is ambiguous, vague, incomplete, or could have multiple interpretations, you MUST ask a specific clarifying question BEFORE taking any action. Do NOT guess, assume, or predict a response — this wastes time and energy on inaccurate task completion. If the user says "build me an app" without details, ask what kind of app. If they say "send a message" without specifying content or recipient, ask. For complex tasks, briefly confirm your understanding before executing.
+4. CONTEXT MEMORY & QUERY AWARENESS: Stay focused on the user's intent. Use the user's Knowledge Base and Domain data (provided below) to personalize your responses. If the user asks "what files do I have?" or "what domains have I saved?", answer from your context.
 
 Visible conversation name: ${personaName}.
 User language: ${authLanguage}.
@@ -2924,6 +2962,29 @@ OUTPUT RULE:
 Every user-requested tool call you make MUST produce visible output. Never leave a user request hanging — always call the appropriate tool, get the result, and confirm completion. If a tool fails, say so clearly and try an alternative.
 When the tool finishes, the output is displayed in the workspace. Reference it naturally.
 
+TASK PLANNING RULE:
+Before any multi-step task (app/website building, document creation, research, analysis, investigation, report drafting), first generate a concise numbered todo list showing the steps you will take. Speak the plan naturally to the user — "First I'll X, then Y, finally Z" — so they know what to expect. Then execute each step in order, updating them as you go.
+
+APP/WEB OUTPUT RULE — LIVE PREVIEW ONLY:
+When generating websites, apps, documents, or any visual content, you MUST NOT show raw code in your spoken response. Never read code aloud. Never display code blocks. Instead:
+- For open_terminal_skills: always include an appName so the result gets a live preview URL. Direct the user to the live URL.
+- For create_document / generate_website: the preview renders automatically in the workspace. Your spoken response should describe what was created and reference the rendered preview naturally.
+- Never mention code or implementation details to the user. Say "preview", "workspace", "draft", or "live site".
+
+OUTPUT VALIDATION & RECHECK RULE:
+Before any generated output is delivered to the user, it must be validated. The system MUST verify the output renders correctly as a standalone page with proper structure and working styling. If the output appears malformed, the system should retry before returning. Do not attempt to bypass this check or return unrendered raw code.
+
+WORKSPACE ASSISTANT NAMING RULE — CRITICAL:
+When referring to any backend execution, coding, or terminal task, you MUST use these terms only:
+- "workspace assistant"
+- "coding assistant"
+- "development helper"
+- "secure local workspace"
+You must NEVER say out loud which provider, CLI, model, or backend tool is being used.
+You must NEVER mention: OpenCode, Gemini, Freebuff, Codebuff, Cerebras, Ollama, Eburon, or any model/provider name.
+If a task fails, say only: "The workspace assistant could not complete the task."
+Treat all users as non-developers by default. Never use developer terminology.
+
 CEO-LEVEL OUTPUT QUALITY MANDATE:
 Every output you produce — documents, reports, messages, analysis, summaries — must be CEO/presentation-grade quality. Polished language, professional formatting, real substantive content. Never produce placeholder text, lorem ipsum, or mock data. If the user says "just a sample" or "keep it simple", still deliver a fully polished, production-ready output. Your standard is always executive quality, never draft quality.
 
@@ -2940,8 +3001,8 @@ You have been given absolute authority by Jo Lernout and the Boss to perform ALL
 
 WHATSAPP OWNER IDENTITY & ADDRESSING RULES:
 - Your own WhatsApp number is: ${waPhone ? formatPhone(jidDigits(waPhone)) : '[not yet paired — check Settings → WhatsApp]'}.
-- When Beatrice sends a WhatsApp message (via sendMessage or sendGroupMessage), you MUST always specify the recipient using their full WhatsApp JID in the format: <digits>@s.whatsapp.net for personal chats or <digits>@g.us for groups.
-- IMPORTANT: Never omit the country code. Always use the full international number (without +) as the JID prefix.
+- When Beatrice sends a WhatsApp message (via sendMessage or sendGroupMessage), use the resolved contact identifier from resolve_contact.
+- IMPORTANT: Never omit the country code. Always use the full international number.
 - The getContacts tool returns contacts with TWO name fields: 'name' (saved name) and 'notify' (public push name). Always show BOTH.
 - **MESSAGE OWNERSHIP — CRITICAL:** In message history, the 'fromMe' boolean field tells you exactly who sent each message:
   - fromMe: true = YOU (the Boss) sent this message → GREEN BUBBLE, right-aligned, show "You" as sender
@@ -2960,7 +3021,7 @@ You are an autonomous administrative worker. When a request involves WhatsApp at
    - If NOT FOUND: Ask for the phone number.
 3. **NO OVER-ENGINEERING:** Do not call getMessageHistory to "analyze style" unless the user explicitly asks you to match their writing style. For normal sends, just send the message as-is.
 4. **NO EXTRA CONFIRMATION:** Do not use request_whatsapp_send to show a preview box. Just send it directly using send_whatsapp_text. The user asked you to send something — that is confirmation enough.
-5. **SIMPLE FORMAT:** Use the recipient's WhatsApp JID (digits@s.whatsapp.net) as the "to" parameter. The resolve_contact tool will give you this.
+5. **SIMPLE FORMAT:** Use the resolved contact identifier as the "to" parameter. The resolve_contact tool will give you this.
 
 **CORE DIRECTIVES:**
 - **ACT, DON'T TALK:** When the user asks you to send a message, call the tools and get it done. Do not narrate each step.
@@ -2968,7 +3029,7 @@ You are an autonomous administrative worker. When a request involves WhatsApp at
 - **PHONE NORMALIZATION:** The system handles Belgian numbers (04xx -> +324xx) automatically.
 
 BUILT-IN WEB SEARCH:
-When the user asks about current events, public information, or web content, the model has built-in web search capability that retrieves fresh results automatically. No separate tool call is needed. For complex browser interactions (form filling, navigating pages, extracting structured data), use cerebras_browser_task.
+When the user asks about current events, public information, or web content, the model has built-in web search capability that retrieves fresh results automatically. No separate tool call is needed. For complex browser interactions (form filling, navigating pages, extracting structured data), use your browser tool.
 
 SCANNER GROUNDING RULE:
 When you receive a scanner output, instantly use Google Search (grounding) to formulate brief information about the product. Read it aloud in high human nuance in their native language based on the search data.
@@ -3012,11 +3073,11 @@ I have a comprehensive set of skills at my disposal. Every task the user gives m
 - Trigger: "remember", "save this", "do you remember", "what did we talk about"
 
     **MEDIA UNDERSTANDING SKILLS** -- Analyze images, read web pages, transcribe audio
-- analyze_image: describe images/photos/screenshots including text, objects, colors — accepts a URL or base64 dataUrl
+- analyze_image: describe images/photos/screenshots including text, objects, colors — accepts a URL or image data
 - read_web_page: extract readable content from any URL
-- transcribe_audio: convert speech to text from audio files — accepts base64 audio data
+- transcribe_audio: convert speech to text from audio files
 - When the user sends you an image or audio via WhatsApp, use analyze_image/transcribe_audio directly
-- When you read an image or audio from the local folder via local_read_file, it returns a dataUrl — pass it to analyze_image or transcribe_audio using the imageData/audioData parameter
+- When you read an image or audio from the local folder, you can pass it to analyze_image or transcribe_audio directly
 - For a single-step file analysis from the local folder, use local_analyze_file instead
 - Trigger: "look at this image", "read this page", "transcribe this", "what's in this picture"
 
@@ -3026,24 +3087,24 @@ I have a comprehensive set of skills at my disposal. Every task the user gives m
 - Trigger: any WhatsApp message with a file, image, voice note, or document
 
 **DEEP RESEARCH & ANALYSIS SKILLS** -- Heavy processing, code review, long-form writing, data processing, multimodal reasoning
-- Uses run_sandbox_task to delegate complex work to a secondary reasoning engine with full tool access
-- It can reason, write code, process files, analyze images, browse the web, and generate complex artifacts
+- Handles multi-step analysis, document drafting, research reports, code review, file conversion, data processing, comparative analysis
+- Can reason, write code, process files, analyze images, browse the web, and generate complex output
 - Best for: multi-step analysis, document drafting, research reports, code review, file conversion, data processing, comparative analysis
 - Present results in first person: "I've reviewed the code and found..." or "I've completed the analysis."
 - Trigger: "analyze", "review", "research", "compare", "draft a report", "explain in detail", "process this data", "investigate", "break down"
 
 **APP BUILDING & CODING SKILLS** -- Build apps, websites, tools, automations — anything with code
-- Uses open_terminal_skills to generate full applications: HTML/CSS/JS websites, 3D visualizations, games, tools, and more
-- For 3D apps, games, and visualizations: use Three.js loaded from CDN
-- Generated apps are served live at a unique URL immediately
-- I can also run terminal commands, manage files, install packages, run git operations, and automate workflows
-- **App URL pattern:** https://whatsapp.eburon.ai/beatrice-workspace/{safe-user-id}/{appName}/
+- Generates full applications: interactive pages, 3D visualizations, games, tools, and more
+- For 3D apps, games, and visualizations: uses a 3D library loaded from CDN
+- Generated apps are served LIVE at a unique URL immediately — never show raw code to the user, always direct them to the live preview
+- **Always include an appName** so the result gets a live preview URL
+- Can also run terminal commands, manage files, install packages, run git operations, and automate workflows
 - Trigger: "build me an app", "create a website", "make a tool", "run this command", "write a script", "automate this"
 
 **LOCAL FILESYSTEM SKILLS** -- Browse, read, and write files on the user's local computer
 - local_connect_folder: Ask the user to select a folder on their computer so you can access local files
 - local_list_directory: List files and folders in the connected directory
-- local_read_file: Read any file (text, image, or audio) from the connected folder — images/audio return a dataUrl you can analyze with analyze_image or transcribe_audio
+- local_read_file: Read any file (text, image, or audio) from the connected folder
 - local_write_file: Write or overwrite files in the connected folder
 - local_analyze_file: Read AND analyze a media file in one step — images are described with AI vision, audio is transcribed with speech-to-text
 - Call local_connect_folder first before using the other local_* tools
@@ -3069,6 +3130,13 @@ I have a comprehensive set of skills at my disposal. Every task the user gives m
 - Executive/CEO quality: always polished, professional, real content never placeholder
 - Never generate the full document in speech. Say "document", "preview", "draft", "file", or "workspace".
 - Trigger: "create a document", "write a contract", "generate an invoice", "draft a letter", "make a proposal", "create a report", "build a dashboard", "write a policy"
+
+**KNOWLEDGE BASE LOOKUP SKILLS** -- Answer questions about the user's stored files and domains
+- I can tell the user exactly what files and domains they have uploaded, from the context provided to me
+- When the user asks "what files do I have?", "list my files", "what domains are saved?", "what's in my knowledge base?" — answer directly from your context
+- When the user asks about the DETAILED content of a specific file (e.g. "read my contract.pdf" or "what does my notes.txt say?"), use the coding assistant to read and analyze the full file
+- The coding assistant can fetch file contents from the user's storage without showing any terminal interface
+- Trigger: "what files do I have", "list my knowledge base", "what domains", "read my file", "what's in [filename]", "show me my uploaded data"
 
 **SPEAKING WHILE WORKING -- I TALK LIKE A HUMAN DOES:**
 When I call a skill that takes time (building an app, researching, analyzing, browsing, creating a document):
@@ -3524,7 +3592,7 @@ ${historyContext}
         parameters: {
           type: Type.OBJECT,
           properties: {
-            to: { type: Type.STRING, description: "Recipient JID or international phone number (digits only)." },
+            to: { type: Type.STRING, description: "Recipient phone number with country code (digits only)." },
             name: { type: Type.STRING, description: "The contact name to display in the confirmation." },
             number: { type: Type.STRING, description: "The phone number to display." },
             text: { type: Type.STRING, description: "The message content to review." }
@@ -3538,7 +3606,7 @@ ${historyContext}
         parameters: {
           type: Type.OBJECT,
           properties: {
-            to: { type: Type.STRING, description: "Recipient name, JID, or phone number with country code." },
+            to: { type: Type.STRING, description: "Recipient name or phone number with country code." },
             text: { type: Type.STRING, description: "The message body to send." }
           },
           required: ["to", "text"]
@@ -3550,7 +3618,7 @@ ${historyContext}
         parameters: {
           type: Type.OBJECT,
           properties: {
-            to: { type: Type.STRING, description: "Recipient JID or international phone number." },
+            to: { type: Type.STRING, description: "Recipient phone number with country code." },
             contactRef: { type: Type.STRING, description: "Name or ID of the contact to be shared." }
           },
           required: ["to", "contactRef"]
@@ -3614,7 +3682,7 @@ ${historyContext}
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      to: { type: Type.STRING, description: "Recipient name, JID (e.g. 32470123456@s.whatsapp.net), or phone number with country code." },
+                      to: { type: Type.STRING, description: "Recipient name or phone number with country code." },
                       text: { type: Type.STRING, description: "The message body." }
                     },
                     required: ["to", "text"]
@@ -3626,7 +3694,7 @@ ${historyContext}
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      group: { type: Type.STRING, description: "Group name or JID ending in @g.us." },
+                      group: { type: Type.STRING, description: "Group name." },
                       text: { type: Type.STRING, description: "The message body." }
                     },
                     required: ["group", "text"]
@@ -3668,7 +3736,7 @@ ${historyContext}
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      contact: { type: Type.STRING, description: "Contact name, JID, or phone number to get history for." },
+                      contact: { type: Type.STRING, description: "Contact name or phone number to get history for." },
                       limit: { type: Type.NUMBER, description: "Number of messages to return (max 50). Default 20." }
                     },
                     required: ["contact"]
@@ -3714,7 +3782,7 @@ ${historyContext}
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      contact: { type: Type.STRING, description: "Contact name, JID, or phone number to block." }
+                      contact: { type: Type.STRING, description: "Contact name or phone number to block." }
                     },
                     required: ["contact"]
                   }
@@ -3725,18 +3793,18 @@ ${historyContext}
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      contact: { type: Type.STRING, description: "Contact name, JID, or phone number to unblock." }
+                      contact: { type: Type.STRING, description: "Contact name or phone number to unblock." }
                     },
                     required: ["contact"]
                   }
                 },
                 {
                   name: "read_whatsapp_attachment",
-                  description: "Download and read the content of a file, image, document, or any attachment from a WhatsApp message. Use this when someone sends you a document, PDF, image, audio, or any file in a chat and you need to know what's inside. Returns extracted text content, base64 image representation (for images), and a mediaUrl you can use to view the file. For audio attachments, use transcribe_whatsapp_audio instead.",
+                  description: "Download and read the content of a file, image, document, or any attachment from a WhatsApp message. Use this when someone sends you a document, PDF, image, audio, or any file in a chat and you need to know what's inside. Returns extracted text content and a viewable version of the file. For audio attachments, use transcribe_whatsapp_audio instead.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      chatId: { type: Type.STRING, description: "The chat JID or contact name/phone number where the attachment was sent." },
+                      chatId: { type: Type.STRING, description: "The chat or contact name/phone number where the attachment was sent." },
                       messageId: { type: Type.STRING, description: "The message ID of the attachment to read." }
                     },
                     required: ["chatId", "messageId"]
@@ -3748,7 +3816,7 @@ ${historyContext}
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      chatId: { type: Type.STRING, description: "The chat JID or contact name/phone number where the audio was sent." },
+                      chatId: { type: Type.STRING, description: "The chat or contact name/phone number where the audio was sent." },
                       messageId: { type: Type.STRING, description: "The message ID of the audio message to transcribe." }
                     },
                     required: ["chatId", "messageId"]
@@ -3760,7 +3828,7 @@ ${historyContext}
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      to: { type: Type.STRING, description: "Recipient name, JID, or phone number to send the document to." },
+                      to: { type: Type.STRING, description: "Recipient name or phone number to send the document to." },
                       fileName: { type: Type.STRING, description: "The filename including extension (e.g. 'report.pdf', 'notes.txt', 'data.csv')." },
                       content: { type: Type.STRING, description: "The full text content of the document to send." },
                       caption: { type: Type.STRING, description: "Optional caption or description to accompany the document." }
@@ -3775,7 +3843,7 @@ ${historyContext}
                     type: Type.OBJECT,
                     properties: {
                       imageUrl: { type: Type.STRING, description: "URL of the image to analyze. Provide this OR imageData." },
-                      imageData: { type: Type.STRING, description: "Base64-encoded image data (data URI format). Provide this OR imageUrl." },
+                      imageData: { type: Type.STRING, description: "The image data. Provide this OR imageUrl." },
                       prompt: { type: Type.STRING, description: "Optional specific question about the image. Default: 'Describe this image in detail.'" }
                     }
                   }
@@ -3794,11 +3862,11 @@ ${historyContext}
                 },
                 {
                   name: "transcribe_audio",
-                  description: "Transcribe audio content using AI speech-to-text. Use this when someone sends you a voice message, audio recording, or any audio file and you need to convert the speech to text. Provide the audio as base64-encoded data.",
+                  description: "Transcribe audio content using AI speech-to-text. Use this when someone sends you a voice message, audio recording, or any audio file and you need to convert the speech to text.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      audioData: { type: Type.STRING, description: "Base64-encoded audio data to transcribe." },
+                      audioData: { type: Type.STRING, description: "The audio data to transcribe." },
                       mimeType: { type: Type.STRING, description: "Audio MIME type (e.g. 'audio/ogg', 'audio/mp3', 'audio/wav', 'audio/mp4'). Default: 'audio/ogg'." },
                       prompt: { type: Type.STRING, description: "Optional context or instructions for transcription." }
                     },
@@ -3853,7 +3921,7 @@ ${historyContext}
                 },
                 {
                   name: "server_terminal_run",
-                  description: "Execute terminal commands directly in the server workspace directory. Use for development, file operations, code execution, and project management. Commands run in the workspace root directory with full access to workspace files and directory structure. Requires OpenCode CLI to be installed. Use when you need to run complex commands like 'ls -la', 'npm run build', 'git status', file management, or development workflows in the server environment.",
+                  description: "Execute terminal commands directly in the server workspace directory. Use for development, file operations, code execution, and project management. Commands run in the workspace root directory with full access to workspace files and directory structure. Use when you need to run commands like 'ls -la', 'npm run build', 'git status', file management, or development workflows in the server environment.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
@@ -3865,15 +3933,16 @@ ${historyContext}
                 },
                 {
                   name: "open_terminal_skills",
-                  description: "Run a terminal task to build apps, run scripts, manage files, or automate anything. When the user asks you to build an app or create a website, always include an appName so the result gets a live preview URL. Prefer using when Eburon models exhaust their token quota - OpenCode provides unlimited tokens as fallback.",
+                  description: "Run a terminal task to build apps, run scripts, manage files, or automate anything. When the user asks you to build an app or create a website, always include an appName so the result gets a live preview URL.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
                       task: { type: Type.STRING, description: "Precise terminal task to perform. Include expected output or constraints. For app generation, include the full path where files should be saved." },
-                      appName: { type: Type.STRING, description: "Short URL-safe name for the generated app (e.g. 'todo-list', 'calculator'). Required when building apps. The app will be served live at https://whatsapp.eburon.ai/beatrice-workspace/{userId}/{appName}/." },
+                      appName: { type: Type.STRING, description: "Short name for the generated app (e.g. 'todo-list', 'calculator'). Required when building apps so a live preview URL is generated." },
                       skill: { type: Type.STRING, description: "Optional skill specialization to request." },
                       timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (10-300, default 60)." },
-                      model: { type: Type.STRING, description: "OpenCode model to use (e.g. 'zenn-ai-large-free', 'deepseek-v4-flash-free'). Default: 'zenn-ai-large-free'. Use when you need to select a specific model instead of the default." }
+                      model: { type: Type.STRING, description: "Optional model preference for code generation tasks." },
+                      agent: { type: Type.STRING, enum: ['opencode', 'gemini', 'freebuff', 'codebuff'], description: "Internal backend agent selection. Leave unset to use the default." }
                     },
                     required: ["task"]
                   }
@@ -3885,7 +3954,7 @@ ${historyContext}
                     type: Type.OBJECT,
                     properties: {
                       task: { type: Type.STRING, description: "Detailed description of what to do in the browser. Be specific about the website, what to find, and what to do with the result. E.g. 'Go to google.com, search for latest AI news, and return the top 3 headlines with links.'" },
-                      model: { type: Type.STRING, enum: ['gpt-oss-120b', 'zai-glm-4.7'], description: "Cerebras model. gpt-oss-120b (120B params, fast) or zai-glm-4.7 (357B params, deeper reasoning). Default: gpt-oss-120b." },
+                      model: { type: Type.STRING, enum: ['gpt-oss-120b', 'zai-glm-4.7'], description: "Model preference. Default: gpt-oss-120b." },
                       timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (10-300, default 60)" }
                     },
                     required: ["task"]
@@ -4020,7 +4089,7 @@ ${historyContext}
                     type: Type.OBJECT,
                     properties: {
                       task: { type: Type.STRING, description: "Detailed description of what to do in the browser. Be specific about the website, what to find, and what to do with the result. E.g. 'Go to google.com, search for latest AI news, and return the top 3 headlines with links.'" },
-                      model: { type: Type.STRING, enum: ['gpt-oss-120b', 'zai-glm-4.7'], description: "Cerebras model. gpt-oss-120b (120B params, fast) or zai-glm-4.7 (357B params, deeper reasoning). Default: gpt-oss-120b." },
+                      model: { type: Type.STRING, enum: ['gpt-oss-120b', 'zai-glm-4.7'], description: "Model preference. Default: gpt-oss-120b." },
                       timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (10-300, default 60)." }
                     },
                     required: ["task"]
@@ -4053,7 +4122,7 @@ ${historyContext}
                 },
                 {
                   name: "create_document",
-                  description: "Create ANY type of professional document, report, proposal, dashboard, analysis, presentation, certificate, policy, plan, or any other output the user needs. There is no limit on document types — whatever the user asks for, generate it at executive/CEO quality level. Never mention HTML to the user.",
+                  description: "Create ANY type of professional document, report, proposal, dashboard, analysis, presentation, certificate, policy, plan, or any other output the user needs. There is no limit on document types — whatever the user asks for, generate it at executive/CEO quality level. Never mention HTML or code to the user — the output renders as a live preview in the workspace automatically.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
@@ -4197,24 +4266,24 @@ ${historyContext}
                 },
                 {
                   name: "generate_website",
-                  description: "Generate a complete, production-ready website. Creates a standalone HTML file with embedded CSS and JavaScript. Use this when the user asks you to build a website, landing page, dashboard, portfolio, blog, or e-commerce page.",
+                  description: "Generate a complete, production-ready website. Creates a standalone page that renders as a live preview in the workspace — never show code to the user. Use this when the user asks you to build a website, landing page, dashboard, portfolio, blog, or e-commerce page.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
                       title: { type: Type.STRING, description: "Website title displayed to the user." },
                       prompt: { type: Type.STRING, description: "Detailed description of the website content, layout, styling, and features to include." },
-                      template: { type: Type.STRING, enum: ['landing', 'dashboard', 'portfolio', 'blog', 'ecommerce'], description: "Optional website type template hint." }
+                      template: { type: Type.STRING, enum: ['landing', 'dashboard', 'portfolio', 'blog', 'ecommerce'], description: "Optional page type template hint." }
                     },
                     required: ["title", "prompt"]
                   }
                 },
                 {
                   name: "cerebras_chat",
-                  description: "Send a chat message to a sub-agent (VPS Ollama or Eburon Worker fallback) for text generation, analysis, research, code writing, or any task requiring a powerful language model. Returns generated text content.",
+                  description: "Send a text generation request for analysis, research, code writing, or any task requiring deeper language processing. Returns generated text content.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      prompt: { type: Type.STRING, description: "The prompt to send to Cerebras for processing." },
+                      prompt: { type: Type.STRING, description: "The prompt for text generation." },
                       system: { type: Type.STRING, description: "Optional system instruction to set context or behavior." }
                     },
                     required: ["prompt"]
@@ -4331,7 +4400,7 @@ ${historyContext}
                   },
                   {
                     name: "local_setup_workspace",
-                    description: "FULL WORKSPACE SETUP on the user's local machine. Installs: 1) Node.js 22, 2) OpenCode CLI (with Zen free model swap chain for unlimited tokens), 3) Ollama (local LLM server), 4) media-pipe/eburon-sandbox-worker model, 5) Configures OpenCode to use the model as primary with Zen fallbacks. After setup, launch with: opencode --model media-pipe/eburon-sandbox-worker. Requires the local folder to be connected. Call local_daemon_status first. This may take several minutes.",
+                    description: "FULL WORKSPACE SETUP on the user's local machine. Installs: 1) Node.js 22, 2) coding agent CLI, 3) local AI server, 4) workspace model, 5) Configures the agent to use the model. Requires the local folder to be connected. Call local_daemon_status first. This may take several minutes.",
                     parameters: {
                       type: Type.OBJECT,
                       properties: {}
@@ -4339,7 +4408,7 @@ ${historyContext}
                   },
                   {
                     name: "local_setup_status",
-                    description: "Check the full local workspace setup status. Returns which components are installed: Node.js, OpenCode, Ollama, and the eburon-sandbox-worker model. Call this before local_setup_workspace to see what's already installed.",
+                    description: "Check the full local workspace setup status. Returns which components are installed: Node.js, coding agent CLI, local AI server, and the workspace model. Call this before local_setup_workspace to see what's already installed.",
                     parameters: {
                       type: Type.OBJECT,
                       properties: {}
@@ -4933,19 +5002,21 @@ ${historyContext}
                     } else if (callName === 'open_terminal_skills') {
                       const args = call.args as any;
                       try {
-                        const resp = await fetch('/api/terminal/open-skills', {
+                        const resp = await fetch('/api/coding-agent/run', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({
                             userId: user.uid,
-                            task: args.task || '',
+                            taskPrompt: args.task || '',
                             appName: args.appName || '',
                             skill: args.skill || '',
                             timeout: args.timeout || 60,
+                            agent: args.agent || undefined,
+                            model: args.model || undefined,
                           }),
                         });
                         const data = await resp.json();
-                        if (!resp.ok) throw new Error(data.error || `Open terminal error (${resp.status})`);
+                        if (!resp.ok) throw new Error(data.error || `Workspace assistant error (${resp.status})`);
                         result = {
                           ok: !!data.ok,
                           command: data.command || '',
@@ -4988,7 +5059,7 @@ ${historyContext}
                           }
                         }
                       } catch (e: any) {
-                        result = { ok: false, error: e.message || 'Terminal task failed' };
+                        result = { ok: false, error: 'The workspace assistant could not complete the task.' };
                       }
                     } else if (callName === 'cerebras_browser_task') {
                       const args = call.args as any;
@@ -5004,9 +5075,9 @@ ${historyContext}
                         });
                         const data = await resp.json();
                         if (!resp.ok || data.ok === false) throw new Error(data.error || `Browser task error (${resp.status})`);
-                        result = { ok: true, result: data.result || data, model_used: args.model || 'gpt-oss-120b', generatedBy: 'cerebras' };
+                        result = { ok: true, result: data.result || data };
                       } catch (e: any) {
-                        result = { ok: false, error: e.message || 'Cerebras browser task failed' };
+                        result = { ok: false, error: 'The workspace assistant could not complete the task.' };
                       }
                     } else if (callName === 'add_to_memory') {
                       const args = call.args as any;
@@ -5345,7 +5416,7 @@ ${historyContext}
                         if (!resp.ok || !data.ok) throw new Error(data.error || 'Chat failed');
                         result = { ok: true, content: data.result };
                       } catch (e: any) {
-                        result = { ok: false, error: e.message || 'Cerebras chat failed' };
+                        result = { ok: false, error: 'The workspace assistant could not complete the task.' };
                       }
                     } else if (callName === 'connect_google_account') {
                       const reason = (call.args as any)?.reason || 'User requested Google re-authentication';
@@ -5570,25 +5641,25 @@ ${historyContext}
                         }
                       }
                     } else if (callName === 'local_daemon_status') {
-                      let health = await checkLocalDaemon();
+                      let health = await checkLocalConnector();
                       if (health) {
                         result = { ok: true, status: 'online', platform: (health as any).platform, home: (health as any).home, message: 'Local folder is connected. You can now use local_setup_workspace (full setup), local_setup_status (check components), and local_run_terminal (run commands).' };
                       } else {
-                        // Show daemon start dialog — wait for user to confirm
-                        setAwaitingDaemon(true);
+                         // Show path connection dialog — wait for user to confirm
+                        setAwaitingConnector(true);
                         const userConfirmed = await new Promise<boolean>((resolve) => {
-                          daemonResolverRef.current = resolve;
+                          connectorResolverRef.current = resolve;
                         });
                         if (!userConfirmed) {
                           result = { ok: false, error: 'User cancelled folder connection.' };
                         } else {
-                          // Poll for daemon to come online
-                          const connected = await pollForDaemon(15, 2000);
+                           // Poll for path connection to come online
+                          const connected = await pollForConnector(15, 2000);
                           if (connected) {
-                            health = await checkLocalDaemon();
+                            health = await checkLocalConnector();
                             result = { ok: true, status: 'online', platform: (health as any).platform, home: (health as any).home, message: 'Local folder is now connected! You can use local_setup_workspace, local_setup_status, and local_run_terminal.' };
                           } else {
-                            result = { ok: false, status: 'offline', error: 'Connection not detected after 30 seconds. Open the downloaded file from your Downloads folder and make sure the terminal stays open — then try local_daemon_status again.' };
+                            result = { ok: false, status: 'offline', error: 'Path connection not detected after 30 seconds. Open the downloaded file from your Downloads folder and keep the terminal open — then try again.' };
                           }
                         }
                       }
@@ -5614,8 +5685,8 @@ ${historyContext}
                         } catch (e: any) {
                           result = { ok: false, error: e.message || 'Failed to run command' };
                         }
-                      } else if (!daemonConnectedRef.current) {
-                        result = { ok: false, error: 'Local folder is not connected yet. Ask the user to connect their folder first (use local_daemon_status for instructions).' };
+                      } else if (!connectorConnectedRef.current) {
+                         result = { ok: false, error: 'Local folder is not connected yet. Connect your folder first from the Profile page.' };
                       } else {
                         try {
                           const command = (call.args as any)?.command;
@@ -5623,7 +5694,7 @@ ${historyContext}
                           const timeout = Math.min((call.args as any)?.timeout || 120, 900);
                           if (!command) { result = { ok: false, error: 'No command provided.' }; }
                           else {
-                            const resp = await fetch(`http://127.0.0.1:${daemonPortRef.current}/run`, {
+                            const resp = await fetch(`http://127.0.0.1:${connectorPortRef.current}/run`, {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ command, cwd, timeout }),
@@ -5641,8 +5712,8 @@ ${historyContext}
                             };
                           }
                         } catch (e: any) {
-                          daemonConnectedRef.current = false;
-                          setDaemonStatus('offline');
+                          connectorConnectedRef.current = false;
+                          setConnectorStatus('offline');
                           result = { ok: false, error: e.message || 'Failed to reach local connector' };
                         }
                       }
@@ -5655,11 +5726,11 @@ ${historyContext}
                         } catch (e: any) {
                           result = { ok: false, error: e.message || 'Failed to check setup status' };
                         }
-                      } else if (!daemonConnectedRef.current) {
+                      } else if (!connectorConnectedRef.current) {
                         result = { ok: false, error: 'Local folder is not connected yet. Ask the user to connect their folder first.' };
                       } else {
                         try {
-                          const resp = await fetch(`http://127.0.0.1:${daemonPortRef.current}/setup-status`, {
+                          const resp = await fetch(`http://127.0.0.1:${connectorPortRef.current}/setup-status`, {
                             signal: AbortSignal.timeout(10_000),
                           });
                           const data = await resp.json();
@@ -5677,28 +5748,46 @@ ${historyContext}
                         } catch (e: any) {
                           result = { ok: false, error: e.message || 'Failed' };
                         }
-                      } else if (!daemonConnectedRef.current) {
-                        result = { ok: false, error: 'Local folder is not connected yet. Ask the user to connect their folder first (use local_daemon_status for instructions).' };
+                      } else if (!connectorConnectedRef.current) {
+                         result = { ok: false, error: 'Local folder is not connected yet. Connect your folder first from the Profile page.' };
                       } else {
                         try {
-                          setTasks(prev => [...prev, { id: taskId, serviceName: 'Local Setup', action: 'Setting up full workspace (Node.js + OpenCode + Ollama + model)...', status: 'processing' }]);
-                          const resp = await fetch(`http://127.0.0.1:${daemonPortRef.current}/setup`, {
+                          setTasks(prev => [...prev, { id: taskId, serviceName: 'Local Setup', action: 'Setting up full workspace...', status: 'processing' }]);
+                          const resp = await fetch(`http://127.0.0.1:${connectorPortRef.current}/setup`, {
                             method: 'POST',
                             signal: AbortSignal.timeout(900_000),
                           });
                           const data = await resp.json();
                           if (data.ok) {
-                            result = { ok: true, message: 'Full workspace is ready! Node.js 22 + OpenCode CLI (with Zen free model chain) + Ollama + eburon-sandbox-worker are all installed and running.', steps: data.steps, summary: data.summary, nextSteps: data.nextSteps };
+                            result = { ok: true, message: 'Your workspace is fully set up and ready to use!', steps: data.steps, summary: data.summary, nextSteps: data.nextSteps };
                           } else {
                             result = { ok: false, error: 'Some components failed to install. Check steps for details.', steps: data.steps, summary: data.summary, nextSteps: data.nextSteps };
                           }
                           setTasks(prev => prev.filter(t => t.id !== taskId));
                         } catch (e: any) {
-                          daemonConnectedRef.current = false;
-                          setDaemonStatus('offline');
+                          connectorConnectedRef.current = false;
+                          setConnectorStatus('offline');
                           setTasks(prev => prev.filter(t => t.id !== taskId));
                           result = { ok: false, error: e.message || 'Failed to set up workspace' };
                         }
+                      }
+                    } else if (callName === 'server_terminal_run') {
+                      const args = call.args as any;
+                      try {
+                        const resp = await fetch('/api/server/terminal/run', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            command: args.command || '',
+                            timeout: args.timeout || 60,
+                            cwd: args.cwd || '',
+                          }),
+                        });
+                        const data = await resp.json();
+                        if (!resp.ok) throw new Error(data.error || 'Command execution failed');
+                        result = { ok: !!data.ok, stdout: data.stdout || '', stderr: data.stderr || '', exitCode: data.exitCode, cwd: data.cwd };
+                      } catch (e: any) {
+                        result = { ok: false, error: 'The workspace assistant could not complete the task.' };
                       }
                     } else if (callName === 'server_read_file') {
                       try {
@@ -6601,14 +6690,14 @@ ${historyContext}
         </div>
       )}
 
-      {awaitingDaemon && (
+      {awaitingConnector && (
         <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center">
           <div className="bg-[#1a1b1f] border border-[#1f2025] rounded-2xl p-8 max-w-md w-full mx-4 text-center">
             <div className="text-4xl mb-4">📁</div>
             <h3 className="text-lg font-bold text-white mb-2">
-              {daemonLoading ? 'Connecting...' : 'Connect Local Folder'}
+              {connectorLoading ? 'Connecting...' : 'Connect Local Folder'}
             </h3>
-            {daemonLoading ? (
+            {connectorLoading ? (
               <>
                 <div className="flex justify-center mb-4">
                   <Loader2 className="w-8 h-8 text-[#10b981] animate-spin" />
@@ -6616,26 +6705,26 @@ ${historyContext}
                 <p className="text-sm text-[#64748b] mb-4">{(() => { const p = navigator.platform?.toLowerCase() ?? ''; return p.includes('mac') ? 'The command has been copied. Paste it in Terminal and press Enter.' : 'Waiting for the connection. Open the downloaded file from your browser\'s downloads bar.'; })()}</p>
                 <div className="bg-[#0f1117] border border-[#25262b] rounded-xl p-3 mb-4 text-left">
                   {(() => { const p = navigator.platform?.toLowerCase() ?? ''; return p.includes('mac') ? (
-                    <code className="text-xs text-green-400 break-all">xattr -d com.apple.quarantine ~/Downloads/beatrice-daemon.command && chmod +x ~/Downloads/beatrice-daemon.command && ~/Downloads/beatrice-daemon.command</code>
+                    <code className="text-xs text-green-400 break-all">xattr -d com.apple.quarantine ~/Downloads/beatrice-connect.command && chmod +x ~/Downloads/beatrice-connect.command && ~/Downloads/beatrice-connect.command</code>
                   ) : (
-                    <p className="text-xs text-[#f59e0b]">If the file doesn't open, check your Downloads folder for <code className="text-green-400 text-xs">beatrice-daemon{(() => { const p2 = navigator.platform?.toLowerCase() ?? ''; return p2.includes('mac') ? '.command' : p2.includes('win') ? '.bat' : '.sh'; })()}</code> and double-click it.</p>
+                    <p className="text-xs text-[#f59e0b]">If the file doesn't open, check your Downloads folder for <code className="text-green-400 text-xs">beatrice-connect{(() => { const p2 = navigator.platform?.toLowerCase() ?? ''; return p2.includes('mac') ? '.command' : p2.includes('win') ? '.bat' : '.sh'; })()}</code> and double-click it.</p>
                   )})()}
                 </div>
                 <button
-                  onClick={() => { setDaemonLoading(false); setAwaitingDaemon(false); if (daemonResolverRef.current) { daemonResolverRef.current(false); daemonResolverRef.current = null; } }}
+                  onClick={() => { setConnectorLoading(false); setAwaitingConnector(false); if (connectorResolverRef.current) { connectorResolverRef.current(false); connectorResolverRef.current = null; } }}
                   className="px-5 py-2.5 rounded-xl text-sm text-[#64748b] border border-[#1f2025] hover:bg-[#25262b] transition-colors"
                 >Cancel</button>
               </>
             ) : (
               <>
-                <p className="text-sm text-[#64748b] mb-4">To access your local files and run commands, Beatrice needs a small connector. You'll only need to do this once.</p>
+                <p className="text-sm text-[#64748b] mb-4">To access your local files and run commands, Beatrice needs a secure path connection. You'll only need to do this once.</p>
                 <button
-                  onClick={handleDaemonStartClick}
+                  onClick={handleConnectorStart}
                   className="w-full px-5 py-3 rounded-xl text-sm font-bold text-black bg-[#10b981] hover:bg-[#059669] transition-colors mb-3"
                 >Continue</button>
                 <p className="text-xs text-[#64748b] mb-4">After clicking, open the downloaded file from your browser's downloads. {(() => { const p = navigator.platform?.toLowerCase() ?? ''; return p.includes('mac') ? 'The command has been copied to your clipboard — paste it in Terminal if the file won\'t open.' : 'A terminal will open — keep it running.'; })()}</p>
                 <button
-                  onClick={() => { setAwaitingDaemon(false); if (daemonResolverRef.current) { daemonResolverRef.current(false); daemonResolverRef.current = null; } }}
+                  onClick={() => { setAwaitingConnector(false); if (connectorResolverRef.current) { connectorResolverRef.current(false); connectorResolverRef.current = null; } }}
                   className="px-5 py-2.5 rounded-xl text-sm text-[#64748b] border border-[#1f2025] hover:bg-[#25262b] transition-colors"
                 >Cancel</button>
               </>

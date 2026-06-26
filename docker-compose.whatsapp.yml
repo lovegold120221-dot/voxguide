@@ -18,6 +18,11 @@ services:
       OPENCODE_ZEN_FREE_MODELS: opencode/zenn-ai-large-free,opencode/deepseek-v4-flash-free,opencode/big-pickle,opencode/north-mini-code-free,opencode/mimo-v2.5-free,opencode/nemotron-3-ultra-free
       OPEN_TERMINAL_FALLBACK_MODEL: media-pipe/eburon-sandbox-worker:latest
       OPEN_TERMINAL_WORKDIR: /app
+      # Coding Agent Provider Config (server-side only)
+      CODING_AGENT_DEFAULT: opencode
+      GEMINI_CLI_PATH: gemini
+      FREEBUFF_PATH: freebuff
+      CODEBUFF_PATH: codebuff
       BEATRICE_WORKSPACE_DIR: /data/beatrice-workspace
       BEATRICE_PUBLIC_URL: https://whatsapp.eburon.ai
     network_mode: "host"
@@ -25,6 +30,7 @@ services:
       - whatsapp_auth:/data/baileys
       - /root/.opencode:/home/node/.opencode:ro
       - beatrice_workspace:/data/beatrice-workspace
+      - workspace_data:/data/workspace
       - wa_media:/data/wa-media
     restart: unless-stopped
     healthcheck:
@@ -37,4 +43,5 @@ services:
 volumes:
   whatsapp_auth:
   beatrice_workspace:
+  workspace_data:
   wa_media:

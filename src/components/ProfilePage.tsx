@@ -101,6 +101,7 @@ export function ProfilePage({
   const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
   const [previewItem, setPreviewItem] = useState<WorkspaceOutput | null>(null);
   const [copiedUrl, setCopiedUrl] = useState(false);
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
 
   useEffect(() => {
     loadProfile();
@@ -110,7 +111,19 @@ export function ProfilePage({
   const loadWorkspace = async () => {
     setLoadingWorkspace(true);
     try {
-      const outputs = await listOutputs(user.uid);
+      let outputs = await listOutputs(user.uid);
+      // If IndexedDB is empty, fetch from server filesystem instead
+      if (outputs.length === 0) {
+        try {
+          const resp = await fetch(`/api/workspace/list/${encodeURIComponent(user.uid)}`);
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data.outputs && Array.isArray(data.outputs)) {
+              outputs = data.outputs;
+            }
+          }
+        } catch {}
+      }
       setWorkspaceOutputs(outputs);
     } catch (e) {
       console.error('Failed to load workspace:', e);
@@ -585,22 +598,22 @@ export function ProfilePage({
                 className="bg-transparent text-[15px] text-white focus:outline-none"
               />
             </div>
-            <div className="p-4 flex flex-col gap-1">
+              <div className="p-4 flex flex-col gap-1">
               <label htmlFor="context-size-slider" className="text-[13px] text-zinc-500">Conversation Context (Messages)</label>
               <div className="flex items-center gap-4 mt-2">
                 <input
                   id="context-size-slider"
                   type="range"
                   min="0"
-                  max="100"
-                  step="1"
+                  max="500"
+                  step="10"
                   value={contextSize}
                   onChange={(e) => setContextSize(parseInt(e.target.value))}
                   className="w-full accent-amber-500 h-1.5 bg-white/5 rounded-lg appearance-none cursor-pointer"
                   aria-label="Conversation Context (Messages)"
                   title="Conversation Context (Messages)"
                 />
-                <span className="text-[13px] text-zinc-500 shrink-0 w-6 text-right">{contextSize}</span>
+                <span className="text-[13px] text-zinc-500 shrink-0 w-10 text-right">{contextSize}</span>
               </div>
             </div>
           </div>
@@ -645,20 +658,10 @@ export function ProfilePage({
 
         <section className="space-y-3">
           <button
-            onClick={() => saveSettings({
-              onSuccess: () => {
-                setSuccess('Settings saved');
-                setTimeout(() => setSuccess(null), 2000);
-              },
-              onError: (msg: string) => {
-                setError(msg);
-                setTimeout(() => setError(null), 4000);
-              }
-            })}
-            disabled={isSaving}
+            onClick={() => setShowSaveConfirm(true)}
             className="w-full p-4 bg-[#d0a78b] rounded-[20px] text-center active:brightness-90 transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-[#d0a78b]/20"
           >
-            {isSaving ? <Loader2 className="w-5 h-5 animate-spin text-black" /> : <Save className="w-5 h-5 text-black" />}
+            <Save className="w-5 h-5 text-black" />
             <span className="text-[15px] font-['SF_Pro_Text',system-ui,sans-serif] font-bold text-black">Save Settings</span>
           </button>
         </section>
@@ -749,6 +752,66 @@ export function ProfilePage({
           </div>
         </div>
       )}
+
+      <AnimatePresence>
+        {showSaveConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[300] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6"
+            onClick={() => setShowSaveConfirm(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={e => e.stopPropagation()}
+              className="bg-[#1C1C1E] rounded-2xl w-full max-w-sm p-6 shadow-2xl border border-white/10"
+            >
+              <h3 className="text-[17px] font-bold text-white mb-2">Save Profile Settings?</h3>
+              <p className="text-[14px] text-zinc-400 mb-2">
+                This will save your persona name, how Beatrice calls you, context size, and all preferences to your account.
+              </p>
+              <div className="text-[12px] text-zinc-500 mb-6 space-y-1 bg-white/5 rounded-xl p-3">
+                {personaName && <p>Persona: <span className="text-zinc-300">{personaName}</span></p>}
+                {userTitle && <p>Call you: <span className="text-zinc-300">{userTitle}</span></p>}
+                <p>Context: <span className="text-zinc-300">{contextSize} messages</span></p>
+                <p>Voice: <span className="text-zinc-300">{VOICE_ALIASES.find(v => v.id === selectedVoice)?.name || selectedVoice}</span></p>
+                <p>Language: <span className="text-zinc-300">{LANGUAGES.find(l => l.code === authLanguage)?.label || authLanguage}</span></p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowSaveConfirm(false)}
+                  className="flex-1 py-3 rounded-xl bg-white/5 text-zinc-300 font-semibold text-[14px] active:bg-white/10 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setShowSaveConfirm(false);
+                    saveSettings({
+                      onSuccess: () => {
+                        setSuccess('Settings saved to your account');
+                        setTimeout(() => setSuccess(null), 2000);
+                      },
+                      onError: (msg) => {
+                        setError(msg);
+                        setTimeout(() => setError(null), 4000);
+                      },
+                    });
+                  }}
+                  disabled={isSaving}
+                  className="flex-1 py-3 rounded-xl bg-[#d0a78b] text-black font-bold text-[14px] active:brightness-90 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {isSaving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

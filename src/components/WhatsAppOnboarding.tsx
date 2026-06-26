@@ -84,7 +84,7 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
   // ── Step 4: Local folder connection ──
   const [folderConnecting, setFolderConnecting] = useState(false);
   const [folderName, setFolderName] = useState('');
-  const [daemonLoading, setDaemonLoading] = useState(false);
+  const [connectorLoading, setConnectorLoading] = useState(false);
   const [folderError, setFolderError] = useState('');
 
   // Check current status on mount
@@ -249,12 +249,12 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
         return;
       }
 
-      // Now download the daemon launcher
-      setDaemonLoading(true);
+      // Now auto-start the path connector
+      setConnectorLoading(true);
       const isMac = navigator.platform?.toLowerCase().includes('mac') ?? false;
       const isWin = navigator.platform?.toLowerCase().includes('win') ?? false;
       const ext = isMac ? '.command' : isWin ? '.bat' : '.sh';
-      const filename = `beatrice-daemon${ext}`;
+      const filename = `beatrice-connect${ext}`;
 
       // Download the .mjs first so it's available for the launcher
       try {
@@ -264,9 +264,9 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
       } catch {}
 
       const script = isMac
-        ? `#!/bin/bash\n\n# Check if Node.js is installed\nif ! command -v node &> /dev/null; then\n  echo "Node.js is not installed."\n  echo "Installing Node.js 22 via Homebrew..."\n  if command -v brew &> /dev/null; then\n    brew install node@22 2>/dev/null || true\n  fi\n  # Fallback: download Node.js binary\n  if ! command -v node &> /dev/null; then\n    curl -fsSL https://nodejs.org/dist/v22.12.0/node-v22.12.0-darwin-arm64.tar.gz -o /tmp/node.tar.gz 2>/dev/null\n    curl -fsSL https://nodejs.org/dist/v22.12.0/node-v22.12.0-darwin-x64.tar.gz -o /tmp/node.tar.gz 2>/dev/null\n    tar -xzf /tmp/node.tar.gz -C /tmp 2>/dev/null\n    export PATH="/tmp/node-v22.12.0-darwin-arm64/bin:/tmp/node-v22.12.0-darwin-x64/bin:$PATH" 2>/dev/null\n  fi\n  if ! command -v node &> /dev/null; then\n    echo "Could not install Node.js automatically."\n    echo "Please install Node.js 22+ from https://nodejs.org"\n    read -p "Press Enter to close..."\n    exit 1\n  fi\nfi\n\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\necho "Starting Beatrice Local Daemon..."\nnode ~/Downloads/beatrice-local-daemon.mjs\n`
+        ? `#!/bin/bash\n\nif ! command -v node &> /dev/null; then\n  echo "Node.js is not installed."\n  echo "Installing Node.js 22 via Homebrew..."\n  if command -v brew &> /dev/null; then\n    brew install node@22 2>/dev/null || true\n  fi\n  if ! command -v node &> /dev/null; then\n    curl -fsSL https://nodejs.org/dist/v22.12.0/node-v22.12.0-darwin-arm64.tar.gz -o /tmp/node.tar.gz 2>/dev/null\n    curl -fsSL https://nodejs.org/dist/v22.12.0/node-v22.12.0-darwin-x64.tar.gz -o /tmp/node.tar.gz 2>/dev/null\n    tar -xzf /tmp/node.tar.gz -C /tmp 2>/dev/null\n    export PATH="/tmp/node-v22.12.0-darwin-arm64/bin:/tmp/node-v22.12.0-darwin-x64/bin:$PATH" 2>/dev/null\n  fi\n  if ! command -v node &> /dev/null; then\n    echo "Could not install Node.js automatically."\n    echo "Please install Node.js 22+ from https://nodejs.org"\n    read -p "Press Enter to close..."\n    exit 1\n  fi\nfi\n\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\necho "Starting Beatrice Path Connection..."\nnode ~/Downloads/beatrice-local-daemon.mjs\n`
         : isWin
-          ? `@echo off\necho Checking Node.js...\nwhere node >nul 2>&1\nif %errorlevel% neq 0 (\n  echo Node.js is not installed.\n  echo Downloading Node.js 22...\n  curl -fsSL -o %TEMP%\\node-installer.msi https://nodejs.org/dist/v22.12.0/node-v22.12.0-x64.msi 2>nul\n  echo Please install Node.js from: https://nodejs.org\n  pause\n  exit /b 1\n)\ncd /d %USERPROFILE%\\Downloads\nif not exist beatrice-local-daemon.mjs (\n  curl -sS -o beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\n)\necho Starting Beatrice Local Daemon...\nnode beatrice-local-daemon.mjs\npause\n`
+          ? `@echo off\necho Checking Node.js...\nwhere node >nul 2>&1\nif %errorlevel% neq 0 (\n  echo Node.js is not installed.\n  echo Downloading Node.js 22...\n  curl -fsSL -o %TEMP%\\node-installer.msi https://nodejs.org/dist/v22.12.0/node-v22.12.0-x64.msi 2>nul\n  echo Please install Node.js from: https://nodejs.org\n  pause\n  exit /b 1\n)\ncd /d %USERPROFILE%\\Downloads\nif not exist beatrice-local-daemon.mjs (\n  curl -sS -o beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\n)\necho Starting Beatrice Path Connection...\nnode beatrice-local-daemon.mjs\npause\n`
           : `#!/usr/bin/env bash\nif ! command -v node &> /dev/null; then\n  echo "Node.js is not installed. Please install Node.js 22+ from https://nodejs.org"\n  read -p "Press Enter to close..."\n  exit 1\nfi\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://whatsapp.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
 
       const blob = new Blob([script], { type: 'application/octet-stream' });
@@ -279,21 +279,21 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
 
-      // Poll for daemon connection
+      // Poll for path connection
       for (let i = 0; i < 30; i++) {
         await new Promise(r => setTimeout(r, 2000));
         try {
           const resp = await fetch('http://127.0.0.1:55420/health', { signal: AbortSignal.timeout(2000) });
           if (resp.ok) {
             saveLocalFolderState({ userId: user.uid, folderName: folderName || handle.name, folderHandle: handle, daemonConnected: true });
-            setDaemonLoading(false);
+            setConnectorLoading(false);
             setStep('pair');
             return;
           }
         } catch {}
       }
-      // Timeout — still let them through, daemon isn't critical for entering the app
-      setDaemonLoading(false);
+      // Timeout — still let them through, connector isn't critical for entering the app
+      setConnectorLoading(false);
       setStep('pair');
     } catch (e: any) {
       if (e.name === 'AbortError' || e.message?.includes('cancelled')) {
@@ -303,7 +303,7 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
       }
     } finally {
       setFolderConnecting(false);
-      setDaemonLoading(false);
+      setConnectorLoading(false);
     }
   };
 
@@ -488,7 +488,7 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
               className="w-full bg-[#00a884] text-black font-semibold rounded-lg py-2.5 sm:py-3 hover:bg-[#06cf9c] text-xs sm:text-sm">
               Allow Location Access
             </button>
-            <button onClick={() => (isDesktop ? setStep('localFolder') : onComplete())}
+            <button onClick={() => onComplete()}
               className="w-full text-xs sm:text-sm text-[#8696a0] hover:text-[#e9edef] py-2">
               Skip, I'll do it later
             </button>
@@ -505,8 +505,8 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
               <h2 className="text-lg sm:text-xl font-semibold mb-1 sm:mb-2">Connect Local Folder</h2>
               <p className="text-xs sm:text-sm text-[#8696a0] mb-4 sm:mb-6">
                 {folderName
-                  ? `Connected to "${folderName}". Waiting for connector to start...`
-                  : 'Beatrice needs access to your local files and terminal. Select a folder on your computer and a small connector will start running.'}
+                  ? `Connected to "${folderName}". Starting path connection...`
+                  : 'Select a folder on your computer for Beatrice to access your files and terminal.'}
               </p>
             </div>
 
@@ -516,29 +516,39 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
               </div>
             )}
 
-            {daemonLoading ? (
+            {connectorLoading ? (
               <div className="space-y-4">
                 <div className="flex justify-center">
                   <Loader2 className="w-8 h-8 text-[#00a884] animate-spin" />
                 </div>
                 <p className="text-xs text-center text-[#8696a0]">
-                  Waiting for the connector to start. Open the downloaded file from your browser's downloads bar.
+                  Starting path connection — open the downloaded file from your downloads bar.
                 </p>
                 <div className="bg-[#182229] border border-[#222d34] rounded-lg p-4 text-left">
                   <p className="text-xs text-[#f59e0b] mb-2">File not opening?</p>
                   <p className="text-xs text-[#8696a0]">
                     Check your Downloads folder for <code className="text-green-400 text-xs">
-                      beatrice-daemon{(() => { const p = navigator.platform?.toLowerCase() ?? ''; return p.includes('mac') ? '.command' : p.includes('win') ? '.bat' : '.sh'; })()}
+                      beatrice-connect{(() => { const p = navigator.platform?.toLowerCase() ?? ''; return p.includes('mac') ? '.command' : p.includes('win') ? '.bat' : '.sh'; })()}
                     </code> and double-click it. Keep the terminal window open.
                   </p>
                 </div>
+                <button onClick={() => setStep('pair')}
+                  className="w-full bg-[#00a884] text-black font-semibold rounded-lg py-2.5 sm:py-3 hover:bg-[#06cf9c] text-xs sm:text-sm">
+                  Continue Setup
+                </button>
               </div>
             ) : (
-              <button onClick={handleFolderConnect}
-                disabled={folderConnecting}
-                className="w-full bg-[#00a884] text-black font-semibold rounded-lg py-2.5 sm:py-3 hover:bg-[#06cf9c] text-xs sm:text-sm disabled:opacity-50">
-                {folderConnecting ? <span className="flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Connecting...</span> : 'Select Folder & Connect'}
-              </button>
+              <div className="space-y-3">
+                <button onClick={handleFolderConnect}
+                  disabled={folderConnecting}
+                  className="w-full bg-[#00a884] text-black font-semibold rounded-lg py-2.5 sm:py-3 hover:bg-[#06cf9c] text-xs sm:text-sm disabled:opacity-50">
+                  {folderConnecting ? <span className="flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Connecting...</span> : 'Select Folder & Connect'}
+                </button>
+                <button onClick={() => { setFolderError(''); setStep('pair'); }}
+                  className="w-full text-xs sm:text-sm text-[#8696a0] hover:text-[#e9edef] py-2">
+                  Skip for now — set up later in Profile
+                </button>
+              </div>
             )}
           </div>
         )}

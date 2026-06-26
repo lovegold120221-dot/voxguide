@@ -142,7 +142,7 @@ export default function App() {
                 persona_name: 'Beatrice',
                 selected_voice: 'Aoede',
                 custom_prompt: '',
-                context_size: 20,
+                context_size: 500,
               });
           }
         } catch (error) {
