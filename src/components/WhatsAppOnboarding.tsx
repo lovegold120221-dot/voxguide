@@ -81,10 +81,9 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
   const [notice, setNotice] = useState('');
   const [checking, setChecking] = useState(true);
 
-  // ── Step 4: Local folder connection ──
+  // ── Step 4: Local folder connection (ONE-CLICK) ──
   const [folderConnecting, setFolderConnecting] = useState(false);
   const [folderName, setFolderName] = useState('');
-  const [daemonLoading, setDaemonLoading] = useState(false);
   const [folderError, setFolderError] = useState('');
 
   // Check current status on mount
@@ -123,19 +122,19 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
     })();
   }, [user.uid]);
 
-  // Skip folder step if already connected (persisted from previous session)
+  // Skip folder step if a folder was already picked in a previous session.
+  // The local daemon is decoupled from this gate — it gets wired up later,
+  // on demand, when the user invokes a terminal/opencode tool. The old
+  // shape blocked pickup behind a `127.0.0.1:55420/health` round-trip,
+  // which was the friction we're removing.
   useEffect(() => {
     if (step !== 'localFolder' || !isDesktop) return;
     (async () => {
       try {
         const state = await getLocalFolderState(user.uid);
         if (state?.folderHandle && state.folderName) {
-          try {
-            const resp = await fetch('http://127.0.0.1:55420/health', { signal: AbortSignal.timeout(2000) });
-            if (resp.ok) {
-              setStep('pair');
-            }
-          } catch {}
+          setFolderName(state.folderName);
+          setStep('pair');
         }
       } catch {}
     })();
@@ -218,92 +217,56 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
     }
   };
 
-  // ── Local folder connection ──
+  // ── Local folder connection (ONE CLICK) ──
+  //
+  // Triggers the native OS folder picker immediately. The local daemon is
+  // deliberately NOT a precondition here — it only matters for the few
+  // tools that actually need it (terminal / opencode / Ollama). Wiring up
+  // the daemon is a separate, opt-in step that the chat agent and the
+  // ProfilePage surface when the user invokes a daemon-needing feature.
+  // That decoupling is what makes this a true one-click connection.
   const handleFolderConnect = async () => {
     setFolderConnecting(true);
     setFolderError('');
     try {
       if (!('showDirectoryPicker' in window)) {
-        setFolderError('Your browser does not support folder access. Please use Chrome or Edge instead.');
-        setFolderConnecting(false);
+        setFolderError(
+          'Folder picking needs Chrome or Edge on a desktop. ' +
+          'You can still pair WhatsApp — tap Continue below.',
+        );
         return;
       }
-      const handle = await (window as any).showDirectoryPicker();
-      if (!handle) {
-        setFolderError('Folder selection was cancelled. Please select a folder to continue.');
-        setFolderConnecting(false);
+      const handle = await (window as any).showDirectoryPicker({
+        id: 'beatrice-local-sync',
+        mode: 'readwrite',
+      });
+      // Some Chromium builds prompt for the elevated readwrite grant
+      // mid-pick. Re-assert the permission here so the persisted handle is
+      // fully usable — mirrors libPickFolder in src/lib/localFolder.ts so
+      // the wizard and the post-onboarding panel share the same gate.
+      const perm = await handle.requestPermission?.({ mode: 'readwrite' });
+      if (perm && perm !== 'granted') {
+        setFolderError(
+          'Read-write access was declined. Pick the folder again and tap ' +
+          '"Allow" when prompted so Beatrice can write outputs back to it.',
+        );
         return;
       }
       setFolderName(handle.name);
-
-      saveLocalFolderState({
+      await saveLocalFolderState({
         userId: user.uid,
         folderName: handle.name,
         folderHandle: handle,
-        daemonConnected: true,
+        daemonConnected: false, // wire up on demand, not up front
       });
-
-      // Electron: folder is connected — proceed immediately
-      if (typeof (window as any).beatriceDesktop?.health === 'function') {
-        setStep('pair');
-        return;
-      }
-
-      // Now download the daemon launcher
-      setDaemonLoading(true);
-      const isMac = navigator.platform?.toLowerCase().includes('mac') ?? false;
-      const isWin = navigator.platform?.toLowerCase().includes('win') ?? false;
-      const ext = isMac ? '.command' : isWin ? '.bat' : '.sh';
-      const filename = `beatrice-daemon${ext}`;
-
-      // Download the .mjs first so it's available for the launcher
-      try {
-        const mjsResp = await fetch('/beatrice-local-daemon.mjs');
-        const mjsText = await mjsResp.text();
-        // The launcher script will also curl the .mjs as fallback, but pre-download it too
-      } catch {}
-
-      const script = isMac
-        ? `#!/bin/bash\n\n# Check if Node.js is installed\nif ! command -v node &> /dev/null; then\n  echo "Node.js is not installed."\n  echo "Installing Node.js 22 via Homebrew..."\n  if command -v brew &> /dev/null; then\n    brew install node@22 2>/dev/null || true\n  fi\n  # Fallback: download Node.js binary\n  if ! command -v node &> /dev/null; then\n    curl -fsSL https://nodejs.org/dist/v22.12.0/node-v22.12.0-darwin-arm64.tar.gz -o /tmp/node.tar.gz 2>/dev/null\n    curl -fsSL https://nodejs.org/dist/v22.12.0/node-v22.12.0-darwin-x64.tar.gz -o /tmp/node.tar.gz 2>/dev/null\n    tar -xzf /tmp/node.tar.gz -C /tmp 2>/dev/null\n    export PATH="/tmp/node-v22.12.0-darwin-arm64/bin:/tmp/node-v22.12.0-darwin-x64/bin:$PATH" 2>/dev/null\n  fi\n  if ! command -v node &> /dev/null; then\n    echo "Could not install Node.js automatically."\n    echo "Please install Node.js 22+ from https://nodejs.org"\n    read -p "Press Enter to close..."\n    exit 1\n  fi\nfi\n\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://beatrice.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\necho "Starting Beatrice Local Daemon..."\nnode ~/Downloads/beatrice-local-daemon.mjs\n`
-        : isWin
-          ? `@echo off\necho Checking Node.js...\nwhere node >nul 2>&1\nif %errorlevel% neq 0 (\n  echo Node.js is not installed.\n  echo Downloading Node.js 22...\n  curl -fsSL -o %TEMP%\\node-installer.msi https://nodejs.org/dist/v22.12.0/node-v22.12.0-x64.msi 2>nul\n  echo Please install Node.js from: https://nodejs.org\n  pause\n  exit /b 1\n)\ncd /d %USERPROFILE%\\Downloads\nif not exist beatrice-local-daemon.mjs (\n  curl -sS -o beatrice-local-daemon.mjs https://beatrice.eburon.ai/beatrice-local-daemon.mjs\n)\necho Starting Beatrice Local Daemon...\nnode beatrice-local-daemon.mjs\npause\n`
-          : `#!/usr/bin/env bash\nif ! command -v node &> /dev/null; then\n  echo "Node.js is not installed. Please install Node.js 22+ from https://nodejs.org"\n  read -p "Press Enter to close..."\n  exit 1\nfi\ncd ~/Downloads\nif [ ! -f ~/Downloads/beatrice-local-daemon.mjs ]; then\n  curl -sS -o ~/Downloads/beatrice-local-daemon.mjs https://beatrice.eburon.ai/beatrice-local-daemon.mjs\nfi\nchmod +x ~/Downloads/beatrice-local-daemon.mjs\nnode ~/Downloads/beatrice-local-daemon.mjs\n`;
-
-      const blob = new Blob([script], { type: 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
-      // Poll for daemon connection
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-          const resp = await fetch('http://127.0.0.1:55420/health', { signal: AbortSignal.timeout(2000) });
-          if (resp.ok) {
-            saveLocalFolderState({ userId: user.uid, folderName: folderName || handle.name, folderHandle: handle, daemonConnected: true });
-            setDaemonLoading(false);
-            setStep('pair');
-            return;
-          }
-        } catch {}
-      }
-      // Timeout — still let them through, daemon isn't critical for entering the app
-      setDaemonLoading(false);
-      setStep('pair');
     } catch (e: any) {
-      if (e.name === 'AbortError' || e.message?.includes('cancelled')) {
-        setFolderError('Folder selection was cancelled. Please select a folder to continue.');
+      if (e?.name === 'AbortError' || e?.message?.includes('cancelled')) {
+        setFolderError('You cancelled the picker. Tap to try again, or Continue to pair WhatsApp.');
       } else {
-        setFolderError(e.message || 'Failed to connect folder');
+        setFolderError(e?.message || 'Could not connect that folder.');
       }
     } finally {
       setFolderConnecting(false);
-      setDaemonLoading(false);
     }
   };
 
@@ -495,18 +458,22 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
           </div>
         )}
 
-        {/* ── STEP 4: CONNECT LOCAL FOLDER (Desktop only) ── */}
+        {/* ── STEP 4: PICK A FOLDER (Desktop only — ONE CLICK) ── */}
         {step === 'localFolder' && (
           <div className="w-full px-4 sm:px-6 py-4 sm:py-6 max-w-lg mx-auto space-y-4 sm:space-y-6">
             <div className="text-center">
               <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-[#00a884]/20 flex items-center justify-center mx-auto mb-3 sm:mb-4">
                 <Folder className="w-6 h-6 sm:w-8 sm:h-8 text-[#00a884]" />
               </div>
-              <h2 className="text-lg sm:text-xl font-semibold mb-1 sm:mb-2">Connect Local Folder</h2>
-              <p className="text-xs sm:text-sm text-[#8696a0] mb-4 sm:mb-6">
-                {folderName
-                  ? `Connected to "${folderName}". Waiting for connector to start...`
-                  : 'Beatrice needs access to your local files and terminal. Select a folder on your computer and a small connector will start running.'}
+              <h2 className="text-lg sm:text-xl font-semibold mb-1 sm:mb-2">
+                {folderName ? 'Folder connected' : 'Pick a folder'}
+              </h2>
+              <p className="text-xs sm:text-sm text-[#8696a0] mb-4 sm:mb-6 leading-relaxed">
+                {folderName ? (
+                  <>We're watching <span className="text-[#e9edef] font-medium">{folderName}</span>. Anything you drop in becomes knowledge; anything Beatrice generates lands here too.</>
+                ) : (
+                  'One click. Beatrice watches this folder, learns what you drop in, and writes outputs back to it. You stay in control.'
+                )}
               </p>
             </div>
 
@@ -516,30 +483,29 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
               </div>
             )}
 
-            {daemonLoading ? (
-              <div className="space-y-4">
-                <div className="flex justify-center">
-                  <Loader2 className="w-8 h-8 text-[#00a884] animate-spin" />
-                </div>
-                <p className="text-xs text-center text-[#8696a0]">
-                  Waiting for the connector to start. Open the downloaded file from your browser's downloads bar.
-                </p>
-                <div className="bg-[#182229] border border-[#222d34] rounded-lg p-4 text-left">
-                  <p className="text-xs text-[#f59e0b] mb-2">File not opening?</p>
-                  <p className="text-xs text-[#8696a0]">
-                    Check your Downloads folder for <code className="text-green-400 text-xs">
-                      beatrice-daemon{(() => { const p = navigator.platform?.toLowerCase() ?? ''; return p.includes('mac') ? '.command' : p.includes('win') ? '.bat' : '.sh'; })()}
-                    </code> and double-click it. Keep the terminal window open.
-                  </p>
-                </div>
-              </div>
-            ) : (
+            {!folderName ? (
               <button onClick={handleFolderConnect}
                 disabled={folderConnecting}
-                className="w-full bg-[#00a884] text-black font-semibold rounded-lg py-2.5 sm:py-3 hover:bg-[#06cf9c] text-xs sm:text-sm disabled:opacity-50">
-                {folderConnecting ? <span className="flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Connecting...</span> : 'Select Folder & Connect'}
+                className="w-full bg-[#00a884] text-black font-semibold rounded-lg py-3 hover:bg-[#06cf9c] text-sm touch-manipulation disabled:opacity-50">
+                {folderConnecting ? (
+                  <span className="flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Picking…</span>
+                ) : (
+                  <span className="flex items-center justify-center gap-2"><Folder className="w-4 h-4" /> Pick my folder</span>
+                )}
+              </button>
+            ) : (
+              <button onClick={() => setStep('pair')}
+                className="w-full bg-[#00a884] text-black font-semibold rounded-lg py-3 hover:bg-[#06cf9c] text-sm touch-manipulation">
+                Continue
               </button>
             )}
+
+            <p className="text-[11px] text-[#8696a0] text-center">
+              On Safari or Firefox (or just skipping for now)?{' '}
+              <button onClick={() => setStep('pair')} className="underline text-[#e9edef] hover:text-[#00a884]">
+                Skip folder pick
+              </button>
+            </p>
           </div>
         )}
       </div>
