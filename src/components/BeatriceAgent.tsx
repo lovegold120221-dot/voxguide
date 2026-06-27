@@ -1128,6 +1128,7 @@ export function BeatriceAgent({
   const sessionHealthyRef = useRef(false);
   const sessionStartingRef = useRef(false);
   const sessionIdRef = useRef<string>(crypto.randomUUID());
+  const processedToolCallIdsRef = useRef<Set<string>>(new Set());
 
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
@@ -2118,6 +2119,8 @@ export function BeatriceAgent({
       const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
       rootDirRef.current = handle;
       connectedFolderNameRef.current = handle.name;
+      // Store folder name in localStorage for UI display (handle cannot be persisted)
+      try { localStorage.setItem('beatrice_connected_folder', handle.name); } catch {}
       if (folderPickerResolverRef.current) {
         folderPickerResolverRef.current({ ok: true, name: handle.name });
         folderPickerResolverRef.current = null;
@@ -4353,6 +4356,19 @@ ${historyContext}
 
                 for (const call of toolCalls) {
                   if (!call.name) continue;
+                  // Deduplicate tool calls by ID to prevent double execution
+                  const callId = call.id || `${call.name}-${JSON.stringify(call.args)}`;
+                  if (processedToolCallIdsRef.current.has(callId)) {
+                    console.log('[Beatrice] Skipping duplicate tool call:', callId);
+                    continue;
+                  }
+                  processedToolCallIdsRef.current.add(callId);
+                  // Limit set size to prevent memory leak
+                  if (processedToolCallIdsRef.current.size > 1000) {
+                    const arr = Array.from(processedToolCallIdsRef.current).slice(-500);
+                    processedToolCallIdsRef.current = new Set(arr);
+                  }
+
                   const callName: string = call.name;
                   const taskId = Math.random().toString(36).substring(7);
                   const serviceName = callName.split('_')[0] || 'System';
