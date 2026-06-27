@@ -12,6 +12,7 @@
     "rootDir": ".",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "types": ["node"],
     "paths": {
       "@/*": ["../*"]
     }

@@ -17,10 +17,10 @@ interface Window {
 }
 
 interface FileSystemDirectoryHandle {
-  /** Non-UI permission check. Optional in spec — async discovery only. */
-  queryPermission?: (options?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
-  /** Requires user gesture. Optional in spec. */
-  requestPermission?: (options?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
+  /** Non-UI permission check. */
+  queryPermission: (options?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
+  /** Requires user gesture. */
+  requestPermission: (options?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
   /** Async iteration over immediate children. */
   values: () => AsyncIterableIterator<[string, FileSystemHandle]>;
   entries: () => AsyncIterableIterator<[string, FileSystemHandle]>;

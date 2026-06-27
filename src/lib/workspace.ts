@@ -7,6 +7,7 @@ export interface WorkspaceOutput {
   blobData?: ArrayBuffer;     // Binary for images
   mimeType: string;
   fileSize: number;
+  url?: string;                // URL for serving the artifact
   driveFileId?: string;
   driveLink?: string;
   createdAt: string;

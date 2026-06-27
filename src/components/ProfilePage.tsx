@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Loader2, Power, Check, Settings, X, Save, Activity, Video, MessageSquare, Globe, User, Mail, FileText, AlertCircle, LogOut, Upload, Trash2, Folder, Download, ExternalLink, Image, Eye, Copy } from 'lucide-react';
+import { Loader as Loader2, Power, Check, Settings, X, Save, Activity, Video, MessageSquare, Globe, User, Mail, FileText, CircleAlert as AlertCircle, LogOut, Upload, Trash2, Folder, Download, ExternalLink, Image, Eye, Copy } from 'lucide-react';
 import { auth } from '../firebase';
 import { signOut } from 'firebase/auth';
 import { supabase } from '../lib/supabase';
@@ -774,7 +774,7 @@ export function ProfilePage({
           <div className="flex-1 bg-white relative overflow-hidden">
             <iframe
               src={previewItem.url ? (previewItem.url.startsWith('/') ? `${getEnv('VITE_BACKEND_URL') || ''}${previewItem.url}` : previewItem.url) : undefined}
-              srcDoc={!previewItem.url ? (previewItem.mimeType === 'text/html' ? previewItem.textContent : `<pre style="font-family:monospace;white-space:pre-wrap;padding:20px;font-size:14px;color:#1f2937">${previewItem.textContent.replace(/</g, '&lt;')}</pre>`) : undefined}
+              srcDoc={!previewItem.url ? (previewItem.mimeType === 'text/html' ? (previewItem.textContent || '') : `<pre style="font-family:monospace;white-space:pre-wrap;padding:20px;font-size:14px;color:#1f2937">${(previewItem.textContent || '').replace(/</g, '&lt;')}</pre>`) : undefined}
               className="w-full h-full border-0"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
               title={previewItem.title}

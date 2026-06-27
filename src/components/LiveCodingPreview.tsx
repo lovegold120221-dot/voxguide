@@ -3,10 +3,7 @@
 // Supports AI code completion and automatic Supabase persistence for manual edits.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import {
-  Terminal, FileCode, Eye, X, Copy, Check, Monitor, Tablet, Smartphone,
-  Loader2, ChevronDown, ChevronRight, RefreshCw, GripVertical, Wand2
-} from 'lucide-react';
+import { Terminal, FileCode, Eye, X, Copy, Check, Monitor, Tablet, Smartphone, Loader as Loader2, ChevronDown, ChevronRight, RefreshCw, GripVertical, Wand as Wand2 } from 'lucide-react';
 import Editor, { loader } from '@monaco-editor/react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -607,14 +604,14 @@ export const LiveCodingPreview = memo(function LiveCodingPreview({
                           }}
                           onMount={(editor, monaco) => {
                             editorRef.current = editor;
-                            registerMonaco(editor, monaco);
+                            registerMonaco(editor, monaco, () => userId);
                           }}
                           onChange={(value) => {
-                            if (value !== null && status !== 'running') {
+                            if (value != null && status !== 'running') {
                               scheduleSave({
                                 path: activeFile.path,
                                 language: activeFile.language,
-                                content: value,
+                                content: value as string,
                               });
                             }
                           }}

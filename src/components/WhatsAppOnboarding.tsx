@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
-import {
-  ArrowLeft, Check, CheckCheck, Folder, Laptop, Loader2, Phone, QrCode, ShieldCheck,
-  Smartphone, X,
-} from 'lucide-react';
+import { ArrowLeft, Check, CheckCheck, Folder, Laptop, Loader as Loader2, Phone, QrCode, ShieldCheck, Smartphone, X } from 'lucide-react';
 import {
   callWhatsAppTool,
   getWhatsAppAdminOverview,
@@ -327,21 +324,24 @@ export function WhatsAppOnboarding({ user, onComplete, onSkip }: WhatsAppOnboard
 
       {/* Step indicator */}
       <div className="flex items-center justify-center gap-1 sm:gap-2 px-2 sm:px-4 py-3 sm:py-4 bg-[#0b141a] overflow-x-auto">
-        {steps.map((s, i) => (
+        {steps.map((s, i) => {
+          const stepIndex = (steps as readonly string[]).indexOf(step);
+          return (
           <div key={s} className="flex items-center gap-1 sm:gap-2 shrink-0">
             <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-[10px] sm:text-xs font-bold ${
               step === s ? 'bg-[#00a884] text-black' :
-              steps.indexOf(step) > i ? 'bg-[#00a884]/30 text-[#00a884]' :
+              stepIndex > i ? 'bg-[#00a884]/30 text-[#00a884]' :
               'bg-[#202c33] text-[#8696a0]'
             }`}>
-              {steps.indexOf(step) > i ? <Check className="w-3 h-3 sm:w-4 sm:h-4" /> : i + 1}
+              {stepIndex > i ? <Check className="w-3 h-3 sm:w-4 sm:h-4" /> : i + 1}
             </div>
             <span className={`text-[10px] sm:text-xs whitespace-nowrap ${step === s ? 'text-[#e9edef] font-medium' : 'text-[#8696a0]'}`}>
               {s === 'localFolder' ? 'Folder' : s === 'pair' ? 'Link' : s === 'permissions' ? 'Permissions' : 'Location'}
             </span>
             {i < steps.length - 1 && <div className="w-4 sm:w-8 h-px bg-[#222d34] shrink-0" />}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Error / Notice */}

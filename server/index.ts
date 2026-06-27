@@ -2791,8 +2791,10 @@ app.post('/api/server/terminal/run', async (req, res) => {
     }
     
     // Execute terminal command
-    const { exec } = await import('node:child_process/promises');
-    const { stdout, stderr } = await exec(command, {
+    const childProcess = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(childProcess.exec);
+    const { stdout, stderr } = await execAsync(command, {
       cwd: workspacePath,
       timeout: timeout * 1000,
       maxBuffer: 50 * 1024 * 1024,
@@ -2861,9 +2863,11 @@ app.post('/api/server/terminal/clone-site', async (req, res) => {
     
     // Build wget command with mirror flags
     const wgetCmd = `wget --mirror --convert-links --adjust-extension --page-requisites --no-parent --directory-prefix="${cloneDir}" "${url}"`;
-    
-    const { exec } = await import('node:child_process/promises');
-    const { stdout, stderr } = await exec(wgetCmd, {
+
+    const childProcess2 = await import('child_process');
+    const { promisify: promisify2 } = await import('util');
+    const execAsync2 = promisify2(childProcess2.exec);
+    const { stdout, stderr } = await execAsync2(wgetCmd, {
       cwd: FILESYSTEM_ROOT,
       timeout: timeout * 1000,
       maxBuffer: 100 * 1024 * 1024,

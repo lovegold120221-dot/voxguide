@@ -45,7 +45,7 @@ export function detectCapability(): Capability {
   const w = window as any;
   if (typeof w.showDirectoryPicker === 'function') return 'full';
   if (typeof w.webkitShowDirectoryPicker === 'function') return 'full';
-  if (typeof navigator !== 'undefined' && navigator.storage?.getDirectory) return 'partial';
+  if (typeof navigator !== 'undefined' && typeof navigator.storage?.getDirectory === 'function') return 'partial';
   return 'none';
 }
 

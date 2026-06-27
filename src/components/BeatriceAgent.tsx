@@ -2150,8 +2150,8 @@ export function BeatriceAgent({
     userTranscriptRef.current = text;
     setUserTranscript(text);
     setMessages(prev => [...prev, { role: 'user', text, timestamp: new Date().toISOString(), sessionId: sessionIdRef.current, skill: selectedSkill || undefined }]);
-    await saveMessage('user', text, undefined, undefined, selectedSkill).catch(() => {});
-    sendTextToLive(text, selectedSkill);
+    await saveMessage('user', text, undefined, undefined, selectedSkill || undefined).catch(() => {});
+    sendTextToLive(text);
     setChatInput("");
     setSelectedSkill(null);
   };
@@ -2198,17 +2198,17 @@ export function BeatriceAgent({
           };
           reader.readAsDataURL(file);
         });
-        if (base64) sendVideoToLive(base64, selectedSkill);
+        if (base64) sendVideoToLive(base64);
       } else if (file.type === 'text/plain') {
         const text = await file.text();
-        sendTextToLive(`[Attached file: ${file.name}]\n${text}`, selectedSkill);
+        sendTextToLive(`[Attached file: ${file.name}]\n${text}`);
       } else {
-        sendTextToLive(`[User attached a file: ${file.name} (${file.type}, ${Math.round(file.size / 1024)}KB)]`, selectedSkill);
+        sendTextToLive(`[User attached a file: ${file.name} (${file.type}, ${Math.round(file.size / 1024)}KB)]`);
       }
 
       const messageText = `Attached file: ${file.name}`;
       setMessages(prev => [...prev, { role: 'user', text: messageText, timestamp: new Date().toISOString(), sessionId: sessionIdRef.current, skill: selectedSkill || undefined }]);
-      await saveMessage('user', messageText, publicUrl, file.name, selectedSkill).catch(() => {});
+      await saveMessage('user', messageText, publicUrl, file.name, selectedSkill || undefined).catch(() => {});
 
     } catch (err) {
       console.error('File attach error:', err);
@@ -6168,7 +6168,7 @@ ${historyContext}
     setModelTranscript('');
   };
 
-  const saveMessage = async (role: 'user' | 'model', text: string, attachmentUrl?: string, attachmentName?: string) => {
+  const saveMessage = async (role: 'user' | 'model', text: string, attachmentUrl?: string, attachmentName?: string, skill?: string) => {
     if (!sessionIdRef.current) {
       sessionIdRef.current = crypto.randomUUID();
       console.warn('[saveMessage] sessionId was undefined — generated new one');
@@ -6183,6 +6183,7 @@ ${historyContext}
           text,
           attachment_url: attachmentUrl,
           attachment_name: attachmentName,
+          skill: skill || null,
         });
       if (error) {
         console.error('[saveMessage] Supabase insert failed:', error.message);
