@@ -2,14 +2,14 @@ import { createClient } from '@supabase/supabase-js';
 import { auth } from '../firebase';
 
 function getSupabaseUrl(): string {
-  const url = process.env.SUPABASE_URL;
-  if (!url) throw new Error('SUPABASE_URL not configured');
+  const url = import.meta.env.VITE_SUPABASE_URL;
+  if (!url) throw new Error('VITE_SUPABASE_URL not configured');
   return url;
 }
 
 function getSupabaseKey(): string {
-  const key = process.env.SUPABASE_PUBLISHABLE_KEY;
-  if (!key) throw new Error('SUPABASE_PUBLISHABLE_KEY not configured');
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  if (!key) throw new Error('VITE_SUPABASE_ANON_KEY not configured');
   return key;
 }
 

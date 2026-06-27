@@ -5,7 +5,7 @@ import { supabase, handleDbError } from '../lib/supabase';
 import { LiveServerMessage, Modality, Type, FunctionDeclaration, getVoiceClient } from '../lib/voiceSession';
 import { AudioRecorder, AudioStreamer } from '../lib/audio';
 import { listKnowledgeFiles, fetchKnowledgeFileContent } from '../lib/supabaseStorage';
-import { Loader2, Mic, Square, Check, Settings, X, Save, Video, MessageSquare, Monitor, ChevronDown, Moon, Sun, Mail, Calendar, ListChecks, HardDrive, Users, FileText, MapPin, Building2, Shield, Calculator, Languages, Heart, Scale, Train, Globe, FileOutput, Network, Zap, Search, GitBranch, Cpu, Fingerprint, Terminal } from 'lucide-react';
+import { Loader as Loader2, Mic, Square, Check, Settings, X, Save, Video, MessageSquare, Monitor, ChevronDown, Moon, Sun, Mail, Calendar, ListChecks, HardDrive, Users, FileText, MapPin, Building2, Shield, Calculator, Languages, Heart, Scale, Brain as Train, Globe, FileOutput, Network, Zap, Search, GitBranch, Cpu, Fingerprint, Terminal } from 'lucide-react';
 import { ToggleSwitch } from './ToggleSwitch';
 import { AnimatePresence, motion } from 'motion/react';
 import { UnifiedTranscript } from './UnifiedTranscript';
@@ -763,7 +763,7 @@ const getEburonApiKey = async (): Promise<string> => {
     // Fallback: direct env var (dev only)
   }
 
-  const fallback = getEnv('VITE_EBURON_TOKEN') || getEnv('EBURON_CORE_KEY');
+  const fallback = getEnv('VITE_EBURON_TOKEN');
   if (fallback) {
     console.warn('[Eburon] Using direct token from env — ephemeral token from backend is preferred.');
     _eburonSessionInfo = { token: fallback };
@@ -2797,20 +2797,16 @@ export function BeatriceAgent({
       aiRef.current = new (_m as any)[_SDK]({ apiKey });
     }
 
-    // ── Proactively renew Google OAuth token ──
+    // ── Proactively renew Google OAuth token via backend ──
     let freshGoogleToken = googleToken;
     try {
       const refreshToken = localStorage.getItem('beatrice_google_refresh_token');
       if (refreshToken) {
-        const res = await fetch('https://oauth2.googleapis.com/token', {
+        const backendUrl = getEnv('VITE_BACKEND_URL') || getBackendUrl();
+        const res = await fetch(`${backendUrl}/api/oauth/google/refresh`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            client_id: process.env.GOOGLE_CLIENT_ID || '',
-            client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
-            refresh_token: refreshToken,
-            grant_type: 'refresh_token'
-          })
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken })
         });
         const data = await res.json();
         if (data.access_token) {
@@ -3192,19 +3188,15 @@ ${historyContext}
         });
 
         if (!isRetry && (res.status === 401 || res.status === 403)) {
-          // Proactively refresh OAuth token
+          // Proactively refresh OAuth token via backend
           try {
             const rt = localStorage.getItem('beatrice_google_refresh_token');
             if (rt) {
-              const tres = await fetch('https://oauth2.googleapis.com/token', {
+              const backendUrl = getEnv('VITE_BACKEND_URL') || getBackendUrl();
+              const tres = await fetch(`${backendUrl}/api/oauth/google/refresh`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams({
-                  client_id: process.env.GOOGLE_CLIENT_ID || '',
-                  client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
-                  refresh_token: rt,
-                  grant_type: 'refresh_token'
-                })
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: rt })
               });
               const tdata = await tres.json();
               if (tdata.access_token) {
@@ -3977,88 +3969,14 @@ ${historyContext}
                 },
                 {
                   name: "dial_contact",
-                  description: "Dial a phone number from the user's phonebook using the native phone dialer. This opens the system phone app with the number pre-filled so the user can tap to call. Use this when the user asks you to call someone (e.g., while driving, hands-free). Requires make_calls permission enabled in settings.",
+                  description: "Dial a phone number from the user's phonebook using the native phone dialer. This opens the system phone app with the number pre-filled so the user can tap to call. Use this when the user asks you to call someone (e.g., while driving, hands-free).",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      phoneNumber: { type: Type.STRING, description: "Phone number to dial (e.g. '+1-555-123-4567')" },
-                      timeRemaining: { type: Type.NUMBER, description: "Number of seconds the user has to accept the call (e.g. 10 for 10 seconds)" }
+                      contactName: { type: Type.STRING, description: "The contact's name for display purposes" },
+                      phoneNumber: { type: Type.STRING, description: "Phone number to dial (e.g. '+1-555-123-4567')" }
                     },
-                    required: ["phoneNumber", "timeRemaining"]
-                  }
-                },
-                {
-                  name: "handle_call_offer",
-                  description: "Handle an incoming call offer from WhatsApp or another service. Shows a notification to the user with options to accept or decline the call.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      callId: { type: Type.STRING, description: "Unique identifier for the call" },
-                      callerName: { type: Type.STRING, description: "Name of the caller" },
-                      callerNumber: { type: Type.STRING, description: "Phone number of the caller" },
-                      callType: { type: Type.STRING, enum: ['voice', 'video'], description: "Type of call" }
-                    },
-                    required: ["callId", "callerName", "callerNumber", "callType"]
-                  }
-                },
-                {
-                  name: "end_call",
-                  description: "End an active call or reject a call offer. Use this when the user wants to end a call or reject an incoming call.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      callId: { type: Type.STRING, description: "Unique identifier of the call to end" }
-                    },
-                    required: ["callId"]
-                  }
-                },
-                {
-                  name: "mute_call",
-                  description: "Mute or unmute the microphone for an active call. Use this to control the microphone during a call.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      callId: { type: Type.STRING, description: "Unique identifier of the call" },
-                      muted: { type: Type.BOOLEAN, description: "Whether to mute (true) or unmute (false) the microphone" }
-                    },
-                    required: ["callId", "muted"]
-                  }
-                },
-                {
-                  name: "send_sms",
-                  description: "Send an SMS message to a phone number. Use this to send text messages to contacts.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      phoneNumber: { type: Type.STRING, description: "Phone number to send SMS to (e.g. '+1-555-123-4567')" },
-                      message: { type: Type.STRING, description: "SMS message content to send" }
-                    },
-                    required: ["phoneNumber", "message"]
-                  }
-                },
-                {
-                  name: "handle_sms",
-                  description: "Handle an incoming SMS message. Use this when a user receives a text message.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      from: { type: Type.STRING, description: "Phone number of the sender" },
-                      message: { type: Type.STRING, description: "SMS message content" }
-                    },
-                    required: ["from", "message"]
-                  }
-                },
-                {
-                  name: "set_user_reminder",
-                  description: "Set a reminder for a future date/time. Use this when the user wants to be reminded of something, schedule an event, or set a notification.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      title: { type: Type.STRING, description: "Title or subject of the reminder" },
-                      dateTime: { type: Type.STRING, description: "Date and time for the reminder (e.g. '2024-12-25T15:00:00')" },
-                      description: { type: Type.STRING, description: "Additional details about the reminder" }
-                    },
-                    required: ["title", "dateTime"]
+                    required: ["phoneNumber"]
                   }
                 },
                 {
@@ -4098,41 +4016,16 @@ ${historyContext}
                   }
                 },
                 {
-                  name: "cerebras_browser_task",
-                  description: "Navigate websites, fill forms, extract data, and automate browser tasks. Use this when the user asks you to browse the web, look up information on a specific website, fill out a web form, extract data from a page, or perform any multi-step browser interaction. After the task completes, present the result naturally.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      task: { type: Type.STRING, description: "Detailed description of what to do in the browser. Be specific about the website, what to find, and what to do with the result. E.g. 'Go to google.com, search for latest AI news, and return the top 3 headlines with links.'" },
-                      model: { type: Type.STRING, enum: ['gpt-oss-120b', 'zai-glm-4.7'], description: "Model preference. Default: gpt-oss-120b." },
-                      timeout: { type: Type.NUMBER, description: "Maximum execution time in seconds (10-300, default 60)." }
-                    },
-                    required: ["task"]
-                  }
-                },
-                {
-                  name: "dial_contact",
-                   description: "Dial a phone number from the user's phonebook using the native phone dialer. This opens the system phone app with the number pre-filled so the user can tap to call. Use this when the user asks you to call someone (e.g., while driving, hands-free). Requires make_calls permission enabled in settings.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      contactName: { type: Type.STRING, description: "The contact's name as saved in the user's phonebook (for display purposes)" },
-                      phoneNumber: { type: Type.STRING, description: "The phone number to dial, in international format (e.g., +32470123456). Use getContacts to look up the number if needed." }
-                    },
-                    required: ["contactName", "phoneNumber"]
-                  }
-                },
-                {
                   name: "whatsapp_call",
-                   description: "Initiate a WhatsApp voice or video call to a contact. Opens WhatsApp with the call screen. Works on mobile devices where WhatsApp is installed.",
+                  description: "Initiate a WhatsApp voice or video call to a contact. Opens WhatsApp with the call screen. Works on mobile devices where WhatsApp is installed.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      contactName: { type: Type.STRING, description: "The contact's name as saved in the user's phonebook." },
+                      contactName: { type: Type.STRING, description: "The contact's name for display purposes" },
                       phoneNumber: { type: Type.STRING, description: "The phone number in international format (e.g., +32470123456)." },
                       callType: { type: Type.STRING, enum: ['voice', 'video'], description: "Type of call. Defaults to 'voice'." }
                     },
-                    required: ["contactName", "phoneNumber"]
+                    required: ["phoneNumber"]
                   }
                 },
                 {

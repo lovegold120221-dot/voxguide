@@ -1,8 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Firestore is not used by this application - deny all access
+    // Data is stored in Supabase (PostgreSQL) instead
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

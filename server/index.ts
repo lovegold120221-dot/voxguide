@@ -97,7 +97,43 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/api/version', (_req, res) => {
-  res.json({ version: '1.0.0', build: 1 });
+  res.json({ version: '1.0.2', build: 1 });
+});
+
+// Google OAuth token refresh - keeps client_secret on backend
+app.post('/api/oauth/google/refresh', async (req, res) => {
+  try {
+    const { refresh_token } = req.body;
+    if (!refresh_token) {
+      res.status(400).json({ error: 'refresh_token required' });
+      return;
+    }
+    const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      res.status(500).json({ error: 'Google OAuth not configured on server' });
+      return;
+    }
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token,
+        grant_type: 'refresh_token'
+      })
+    });
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text();
+      res.status(tokenRes.status).json({ error: 'Token refresh failed', details: errText });
+      return;
+    }
+    const data = await tokenRes.json();
+    res.json({ access_token: data.access_token, expires_in: data.expires_in });
+  } catch (err: any) {
+    res.status(500).json({ error: getMsg(err) });
+  }
 });
 
 // ── Eburon provider routes ──

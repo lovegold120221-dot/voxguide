@@ -1,5 +1,5 @@
-const APP_VERSION = '1.0.1';
-const CACHE_NAME = 'beatrice-v5';
+const APP_VERSION = '1.0.2';
+const CACHE_NAME = 'beatrice-v6';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
