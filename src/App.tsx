@@ -6,9 +6,12 @@ import {
   signOut,
   User,
   signInWithPopup,
+  signInWithRedirect,
   GoogleAuthProvider,
   linkWithPopup,
+  linkWithRedirect,
   reauthenticateWithPopup,
+  reauthenticateWithRedirect,
   getRedirectResult,
   browserLocalPersistence,
   setPersistence
@@ -135,7 +138,7 @@ export default function App() {
             .maybeSingle();
 
           if (!existing) {
-            await supabase
+            const { error: insertErr } = await supabase
               .from('user_settings')
               .insert({
                 user_id: u.uid,
@@ -144,6 +147,7 @@ export default function App() {
                 custom_prompt: '',
                 context_size: 500,
               });
+            if (insertErr) throw insertErr;
           }
         } catch (error) {
           handleDbError(error, 'user_settings', 'create');
@@ -201,9 +205,19 @@ export default function App() {
         if (err.code === 'auth/popup-closed-by-user') {
           throw new Error('Sign-in was cancelled.');
         }
-        // If Firebase fell back to redirect (sessionStorage failure), user will be redirected here
-        // The getRedirectResult handler above will catch it on reload
-        throw err;
+        // Cross-Origin-Opener-Policy blocks window.closed access in popups.
+        // Fall back to redirect flow.
+        if (currentUser) {
+          const isGoogleLinked = currentUser.providerData.some(p => p.providerId === 'google.com');
+          if (isGoogleLinked) {
+            await reauthenticateWithRedirect(currentUser, provider);
+          } else {
+            await linkWithRedirect(currentUser, provider);
+          }
+        } else {
+          await signInWithRedirect(auth, provider);
+        }
+        return; // page will redirect, getRedirectResult handles on return
       }
       const credential = GoogleAuthProvider.credentialFromResult(result);
       const refreshToken = (result as any)._tokenResponse?.oauthRefreshToken;

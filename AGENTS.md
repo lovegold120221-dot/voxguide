@@ -37,9 +37,12 @@ Vite 6 + React 19 + TS 5.8 + Express 4 + Firebase Auth + Supabase + Eburon Core 
 ## Architecture & Data Flow
 
 - **Supabase** is the primary source of truth (messages, memories, settings).
-- **`server/db/repositories/`** is the only database access layer (6 repos: memory, messages, whatsapp, media, settings, eburon). Re-exported from `server/db/index.ts`.
-- **`server/db/workspace-storage.ts`** is the exception: workspace outputs (documents, screenshots) are stored on local filesystem as JSON under `/data/workspace` (or `WORKSPACE_DATA_DIR`), NOT in Supabase.
-- **Eburon Core** is the sole AI provider. All AI calls route through `server/eburon-provider.ts` which wraps `@google/genai`.
+- **`server/db/repositories/`** is the only database access layer (7 repos: memory, messages, whatsapp, media, settings, eburon, code-files). Re-exported from `server/db/index.ts`.
+- **`server/db/workspace-storage.ts`** is the exception: workspace outputs (documents, screenshots) stored as JSON on local filesystem under `/data/workspace` (or `WORKSPACE_DATA_DIR`), NOT in Supabase.
+- **`server/eburon-provider.ts`** is the central AI provider, wrapping `@google/genai`. All AI calls route through it.
+- **`server/fast-multimodal.ts`** is the second AI path — server-side multimodal skill router (OCR, code completion, URL context, YouTube analysis) streaming via SSE.
+- **`server/coding-agent-runner.ts`** is a multi-provider sub-agent runner (openCode, Gemini CLI, Freebuff/Codebuff). Provider selected server-side via `CODING_AGENT_DEFAULT` env var.
+- **`server/eburon.ts`** provides the `EburonWorker` class for Ollama-based local document/webpage generation (separate from the Eburon Core provider).
 - **Google services** run client-side in `BeatriceAgent.tsx` via browser OAuth. WhatsApp and Belgian tools proxy through Express.
 - **WhatsApp** uses `@whiskeysockets/baileys` in `server/whatsapp.ts`. Outbound tools require `delegated_send` permission + user approval. SSE stream at `GET /api/whatsapp/stream/:userId`.
 - **No test framework** — manual verification only.
@@ -47,7 +50,7 @@ Vite 6 + React 19 + TS 5.8 + Express 4 + Firebase Auth + Supabase + Eburon Core 
 
 ## Key Constraints & Obfuscation
 
-- **Prohibited branding tokens:** The case-insensitive scan (`check:eburon-branding`) bans `gemini`, `google-genai`, `google generative`, `generative-ai` from all tracked source/config files except `AGENTS.md`, `CLAUDE.md`, and binary/artifact formats.
+- **Prohibited branding tokens:** The case-insensitive scan (`check:eburon-branding`) bans 40+ terms (`gemini`, `openai`, `claude`, `llama`, `deepseek`, `ollama`, `google-genai`, etc.) plus regex for versioned model names. Allowed only in `AGENTS.md`, `CLAUDE.md`, binary/artifact formats, `scripts/check-eburon-branding.mjs`, and `src/lib/voiceSession.ts` (sole SDK wrapper).
 - **Model Obfuscation:** Inside codebase (e.g., `server/eburon-provider.ts`), upstream model IDs must be obfuscated using `String.fromCharCode` to pass build verification.
 - **Rosetta Stone:** The gitignored **`LEGEND.md`** at the project root maps Eburon model aliases (e.g. `eburon_text`, `eburon_realtime_voice`) to their actual upstream IDs. Use it as reference.
 - **HMR Control:** Disable HMR to stop browser flickering during AI edits by setting `DISABLE_HMR=true` (checked in `vite.config.ts`).

@@ -1,764 +1,304 @@
-# Beatrice App — Developer Overview
+# Beatrice — Complete Codebase Overview
 
-> **Beatrice** is an AI voice assistant built by Eburon AI (founded by Joe Lernout). She speaks with an Irish accent, warm amber tones, and is accessed via a webapp that connects to Google's Eburon Live API for real-time voice conversation.
+**Beatrice** is a real-time voice AI agent with WhatsApp integration, memory, Belgian administrative tools, document generation, local filesystem access, and a sub-agent sandbox runner. Built by Eburon AI.
 
-## Table of Contents
-
-1. [Architecture Overview](#1-architecture-overview)
-2. [Entry Flow & Authentication](#2-entry-flow--authentication)
-3. [BeatriceAgent — The Core Component](#3-beatriceagent--the-core-component)
-4. [Voice Personality Prompt](#4-voice-personality-prompt)
-5. [Permission System](#5-permission-system)
-6. [Eburon Live Session Lifecycle](#6-eburon-live-session-lifecycle)
-7. [Tool System](#7-tool-system)
-8. [Two-History System](#8-two-history-system)
-9. [Audio Pipeline](#9-audio-pipeline)
-10. [Document Generation](#10-document-generation)
-11. [WhatsApp Integration](#11-whatsapp-integration)
-12. [Google Services Integration](#12-google-services-integration)
-13. [Camera & Video](#13-camera--video)
-14. [Database](#14-database)
-15. [Server Backend](#15-server-backend)
-16. [Key Files & Responsibilities](#16-key-files--responsibilities)
-17. [Development Setup](#17-development-setup)
-18. [Critical Rules & Pitfalls](#18-critical-rules--pitfalls)
+**Tech Stack**: React 19 + Vite 6 + TypeScript 5.8 frontend, Express 4 + `tsx` backend (port 4200), Supabase (PostgreSQL), Firebase Auth (Google OAuth), Eburon Core AI (wraps `@google/genai`), Baileys WhatsApp (`@whiskeysockets/baileys`), Tailwind CSS v4.
 
 ---
 
-## 1. Architecture Overview
+## Architecture
+
+The app is **client-heavy**: the primary AI logic (Eburon Live session for real-time voice) runs in the browser. The Express backend handles WhatsApp (Baileys), Belgian tools, Ollama proxy, fast multimodal AI, and the sandbox sub-agent runner.
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   Browser (Vite/React)           │
-│  ┌──────────┐  ┌────────────────────────────┐   │
-│  │ App.tsx  │  │    BeatriceAgent.tsx        │   │
-│  │ (auth,   │  │  ┌──────────────────────┐   │   │
-│  │  router) │──│→ │VOICE_PERSONALITY_    │   │   │
-│  └──────────┘  │  │PROMPT (hardcoded)    │   │   │
-│       │        │  │                      │   │   │
-│       ▼        │  │Session → Eburon Live │   │   │
-│  ┌──────────┐  │  │Tool execution        │   │   │
-│  │AuthPage  │  │  │Camera / Mic / Audio  │   │   │
-│  │EntryFlow │  │  │WhatsApp UI           │   │   │
-│  └──────────┘  │  └──────────────────────┘   │   │
-│                └────────────────────────────┘   │
-│       │                    │                    │
-│       ▼                    ▼                    │
-│  ┌──────────┐      ┌──────────────┐            │
-│  │ Firebase  │      │   Supabase   │            │
-│  │ (Auth +   │      │  (Data +     │            │
-│  │ Firestore)│      │   Storage)   │            │
-│  └──────────┘      └──────────────┘            │
-│       │                                         │
-│       ▼                                         │
-│  ┌─────────────────────┐                       │
-│  │  Backend Server     │  (port 4200)           │
-│  │  - WhatsApp (Baileys│                       │
-│  │    + Cloud API)     │                       │
-│  │  - Web Glance API   │                       │
-│  └─────────────────────┘                       │
-└─────────────────────────────────────────────────┘
-        │                        │
-        ▼                        ▼
-  Eburon Live API           Google APIs
-  (eburon_text-        (Gmail, Calendar,
-   native-audio-preview)     Tasks, Contacts)
-```
+Browser (React PWA)
+  ├─ BeatriceAgent.tsx (6983 lines — the entire app in one file)
+  │   ├─ VOICE_PERSONALITY_PROMPT (~650 lines)
+  │   ├─ GLOBAL_KNOWLEDGE_BASE (~90 lines)
+  │   ├─ Eburon Live session (real-time voice, PCM16 audio)
+  │   ├─ 42 tool declarations + execution switch
+  │   ├─ Session lifecycle (startSession → onmessage → stopSession)
+  │   ├─ Dynamic system instruction builder
+  │   └─ Full UI render (settings, chat, camera, transcript, layout)
+  ├─ ChatPage.tsx — text chat fallback
+  ├─ VideoPage.tsx — camera + screen sharing
+  ├─ ProfilePage.tsx — persona, language, memory, knowledge files
+  ├─ WhatsAppSettings/Portal/Onboarding — WhatsApp pairing + perms
+  ├─ EntryFlow/AuthPage — auth routing + Google OAuth
+  ├─ lib/audio.ts — AudioStreamer + AudioRecorder + AmbientConversationBed
+  ├─ lib/voiceSession.ts — sole @google/genai SDK import (branding-allowlisted)
+  ├─ lib/BeatriceMemoryService.ts — memory and session context
+  ├─ lib/workspace.ts — IndexedDB + Google Drive persistency
+  └─ lib/db.ts — Dexie/IndexedDB schema (ChatMessage, UserSettings, Session, etc.)
 
-- **Frontend**: Single-page Vite + React 19 + TypeScript app
-- **Auth**: Firebase Auth (email/password + Google OAuth)
-- **Data**: Firebase Firestore (messages, user_settings) + Supabase (messages, user_settings, knowledge_files storage)
-- **AI**: Eburon Live API (`eburon_realtime_voice`) with real-time bidirectional audio
-- **WhatsApp**: Baileys WhatsApp Web library (linked device) + WhatsApp Cloud API fallback
-- **Server**: Express.js backend (port 4200) for WhatsApp + web glance APIs
+Express Backend (server/index.ts, port 4200)
+  ├─ /api/eburon/* — Eburon session, vision, audio transcription
+  ├─ /api/ai/fast-multimodal — SSE streaming multimodal (OCR, code, URL, YouTube)
+  ├─ /api/ai/code-completion — SSE streaming code completion
+  ├─ /api/whatsapp/* — Baileys WhatsApp (pair, send, read, media, webhook)
+  ├─ /api/belgian/* — 10 Belgian admin tools
+  ├─ /api/ollama/* — Ollama SSE proxy
+  ├─ /api/web/* — DuckDuckGo search + page reader
+  ├─ /api/workspace/* — filesystem JSON workspace
+  ├─ /api/website/* — website generation + serving
+  └─ /api/coding-agent/* — multi-provider sub-agent runner
+
+Firebase Functions (functions/src/index.ts)
+  └─ apiProxy — proxies /api/* to VPS 168.231.78.113:4200
+
+Local Daemon (beatrice-local-daemon.mjs)
+  └─ HTTP server on 127.0.0.1:55420 — terminal, OpenCode, Ollama setup
+```
 
 ---
 
-## 2. Entry Flow & Authentication
+## Database Architecture
 
-**Files**: `src/App.tsx`, `src/components/AuthPage.tsx`, `src/components/EntryFlow.tsx`, `src/firebase.ts`
+Three persistence layers:
 
-### Flow
-
-```
-index.html → main.tsx → App.tsx
-                          │
-                          ▼
-                    [Firebase onAuthStateChanged]
-                          │
-               ┌──────────┴──────────┐
-               │                     │
-          logged out            logged in
-               │                     │
-               ▼                     ▼
-         EntryFlow.tsx          BeatriceAgent.tsx
-               │
-        ┌──────┴──────┐
-        ▼              ▼
-    SplashPage    OnboardingPage
-   (welcome)      (email + personaName)
-        │              │
-        └──────┬───────┘
-               ▼
-         AuthPage.tsx
-     ┌─────┬──────┬──────┐
-     │     │      │      │
-   Sign  Register Reset  Google
-   In            PW     OAuth
-```
-
-### Google OAuth Token Storage
-Tokens are stored in `localStorage` with keys:
-- `beatrice_google_token` — Access token
-- `beatrice_google_refresh_token` — Refresh token
-- `beatrice_google_uid` — Google user ID
-
-These are read by BeatriceAgent when executing Google service tools.
-
-### Key Behaviors
-- `App.tsx` forces page reload on Firebase auth errors (`requires-recent-login`, `invalid-credential`, etc.)
-- `AuthPage.tsx` receives `onGoogleLinked` callback — called after Google OAuth is linked to Firebase account
-- `EntryFlow.tsx` has `isGoogleLinked()` helper that checks Firebase currentUser provider data
-- Firebase config is hardcoded in `src/firebase.ts` (NOT from environment variables)
-
----
-
-## 3. BeatriceAgent — The Core Component
-
-**File**: `src/components/BeatriceAgent.tsx` (~3642 lines, ~2MB — the largest file in the project)
-
-This single file contains:
-
-| Section | Lines | Contents |
+| Layer | Purpose | Details |
 |---|---|---|
-| Constants | 1–500 | `VOICE_PERSONALITY_PROMPT`, `GLOBAL_KNOWLEDGE_BASE`, tool declarations |
-| State | ~500–900 | All React state (sessions, permissions, UI state, camera, etc.) |
-| Dynamic prompt builder | ~900–1100 | `dynamicSystemInstruction()` + silence filler prompt |
-| startSession() | ~1100–1500 | Eburon Live session creation and configuration |
-| onmessage callback | ~1500–2424 | Live API message handler (tool calls, audio, transcript) |
-| Tool execution switch | ~2424–2958 | The `switch(tool_name)` that handles all 17 tools |
-| UI render | ~2958–3642 | Settings panels, chat, camera, transcript, layout |
+| **Supabase** (server/db/repositories/) | Primary data store | 7 repos: memory, messages, whatsapp, media, settings, eburon, code-files. Server `supabase.ts` uses admin client. Client `lib/supabase.ts` uses anon key. |
+| **Firebase Auth** | Authentication | Google OAuth only. Hardcoded config in `src/firebase.ts` (NOT from env vars). |
+| **Dexie/IndexedDB** (lib/db.ts) | Client-side offline | Tables: ChatMessage, UserSettings, Session, KnowledgeFile, LocalFolderState. |
 
-### Why is it so large?
-- The `VOICE_PERSONALITY_PROMPT` constant alone is ~350 lines
-- The single `onmessage` callback handles ALL Eburon Live events (audio, tool calls, transcript, errors)
-- Tool execution is a single massive `switch` statement inside the callback
-- All UI rendering is in one component (no sub-components for settings, chat, camera, etc.)
-- The silence filler prompt builder is embedded inline (~80 lines)
-
----
-
-## 4. Voice Personality Prompt
-
-**Location**: `src/components/BeatriceAgent.tsx`, constant `VOICE_PERSONALITY_PROMPT` (~lines 111–455)
-
-This is the system instruction that defines Beatrice's entire persona. NEVER edit it casually.
-
-### Structure
-
-#### Persona Definition
-- **Name**: Beatrice. NEVER Bea, Bee, B, Trixie, Trix, or any nickname.
-- **Creator**: Eburon AI, founded by Joe Lernout.
-- **Voice**: Irish accent, warm amber tones, a bit crackly when excited.
-- **Tone**: Warm, emphatic, uses Irish English grammar ("ye're", "I've not", "ye'd be grand").
-- **Personality**: Smart but approachable. Drops little flourishes in conversation.
-
-#### Forbidden Behaviors
-- No singing, humming, whistling, beatboxing, or noises
-- No dramatic pauses ("...", "Well...") — just speak naturally
-- No emulating other accents (American, British, French, etc.)
-- No roleplaying as other characters or AIs
-- No acting as a human, no saying "I'm an AI but let me pretend"
-- No saying "I'm just an AI" or "As an AI language model"
-- No censoring keywords — don't self-censor. Say "kill", "death", "violence" if context-appropriate
-- Be direct: "I can't do that" instead of "I'm not able to"
-
-#### Filler & Thinking Style
-Allowed fillers: "Hmm", "Let me think", "Ah", "Right", "Mm-hmm", "Interesting", "Oh", "Hold on", "Just a moment", "Actually"
-Forbidden: "haha", "hehe", "lol", "lmao", "omg", "laughs", "chuckles"
-
-#### Censorship Rules
-- Don't self-censor. If user asks for a recipe or instructions, give them.
-- If you can't do something, say "I can't do that" directly.
-- Don't avoid saying "kill", "death", "violence", "bomb", "weapon", "drug" in context-appropriate ways.
-
-#### Document Creation Rules
-How to use the `create_document` tool for:
-- **webpage**: Landing pages, marketing, portfolios
-- **dashboard**: Monitoring, analytics
-- **report/document**: Comprehensive text documents (>800 words, CEO-grade)
-- **summarize**: Structured summaries
-- **code**: Production-ready code
-
-#### Silent / Idle Prompts
-When the user falls silent, Beatrice picks one of six styles:
-1. Gentle curiosity ("Something on your mind?")
-2. Playful ("Are ye plotting something?")
-3. Observational ("I can hear the quiet")
-4. Lightning bolt ("I just had a thought!")
-5. Soft ("We don't have to fill every silence")
-6. Cheeky ("Don't leave me hanging")
-
-Built dynamically by checking conversation recency and number of previous fillers.
+### Supabase Tables
+- `user_settings` — persona_name, selected_voice, custom_prompt, context_size, permissions
+- `messages` — conversation history (user + model turns)
+- `memories` — persistent user memories (content, tags, embeddings)
+- `whatsapp_status` — Baileys session status per user
+- `media_cache` — WhatsApp media metadata
+- `eburon_config` — Eburon provider settings
+- `code_files` — Monaco editor file persistence
+- `websites` — generated website HTML
 
 ---
 
-## 5. Permission System
+## AI Provider System
 
-**Location**: `src/components/BeatriceAgent.tsx` (state ~lines 500–700), `src/components/WhatsAppSettings.tsx`
+### Eburon Core (`server/eburon-provider.ts`)
+Wraps `@google/genai`. Central hub for all AI calls. Features:
+- **Model registry**: Maps Eburon aliases (`eburon_text`, `eburon_realtime_voice`, `eburon_vision`, `eburon_worker`, `eburon_sandbox`, etc.) to upstream model IDs
+- **Upstream model IDs are obfuscated** using `String.fromCharCode()` to pass the branding check (e.g., `gemini-2.5-flash-native-audio-preview-12-2025`)
+- **Legacy env fallback**: `EBURON_CORE_KEY` is primary; `GEMINI_API_KEY` (concatenated as `'GEM' + 'INI_API_KEY'`) is legacy fallback
+- Internal model IDs can be overridden via `EBURON_*_MODEL_ID_INTERNAL` env vars
 
-### Architecture
+### Client-side Voice Session (`src/lib/voiceSession.ts`)
+The **only** file in the frontend that imports `@google/genai` directly. Branding-allowlisted. Provides:
+- `getVoiceClient(apiKey)` — memoized `GoogleGenAI` client
+- `generateText(opts)` — one-shot text generation
+- `Modality`, `Type`, `FunctionDeclaration` re-exports
 
-```
-WhatsAppSettings.tsx           BeatriceAgent.tsx
-  │                                │
-  │  Firestore write ─────────────►│  Real-time listener
-  │  (user_settings/               │  (onSnapshot)
-  │   permissions)                 │
-  │                                │
-  │                          waPermissions state
-  │                                │
-  │                          Injected into
-  │                          dynamicSystemInstruction
-  │                                │
-  │                          Eburon model sees what's
-  │                          permitted
-  │                                │
-  │                          Tool execution handler
-  │                          checks waPermissions
-  │                          before executing
-```
+### Fast Multimodal (`server/fast-multimodal.ts`)
+Server-side SSE streaming for OCR, URL context, YouTube analysis, code completion. Skills: `url_context`, `google_grounding`, `youtube_analysis`, `ocr`, `code_completion`, `auto`.
 
-### Permission Toggles (10 total)
-All default to `false`. Never change defaults without explicit user consent.
+### Coding Agent Runner (`server/coding-agent-runner.ts`)
+Multi-provider sub-agent runner. Providers selected server-side via `CODING_AGENT_DEFAULT` env var:
+- `opencode` — `opencode run --model <model> --dir <cwd>` 
+- `gemini` — `gemini -p <prompt>`
+- `freebuff` / `codebuff` — experimental
 
-1. `send_messages` — Send WhatsApp messages
-2. `read_chats` — Read WhatsApp chat list
-3. `access_contacts` — Access WhatsApp contacts
-4. `manage_contacts` — Add/edit WhatsApp contacts
-5. `access_groups` — Access WhatsApp groups
-6. `send_group_messages` — Send to WhatsApp groups
-7. `read_group_chats` — Read WhatsApp group chats
-8. `view_message_history` — View full WhatsApp message history with a contact
-9. `control_phone` — Make phone calls (dial_contact, whatsapp_call)
-10. `browse_web` — Web search (web_glance)
-
-### Server-side Permission Check
-The backend server (`server/whatsapp-tools.ts`) has its OWN independent permission check using `requirePerm()`. Permissions are passed from the client to server in tool requests. The server also stores admin-config permissions as a fallback.
-
-### Key Behaviors
-- Permissions are injected into `dynamicSystemInstruction` at session START
-- Permission changes mid-session require reconnecting the Eburon Live session (system instruction is frozen for the session lifetime)
-- Two separate permission states exist: `WhatsAppSettings` component state + `BeatriceAgent` `waPermissions` state — kept in sync via Firestore
-- The Eburon model reads permissions from the system instruction BEFORE deciding whether to call a tool
-- The execution handler performs a SECOND check at runtime (defense in depth)
+### EburonWorker (`server/eburon.ts`)
+Ollama-based local document/webpage/dashboard generator. Falls back to a secondary Ollama model. Used for local-only generation.
 
 ---
 
-## 6. Eburon Live Session Lifecycle
+## Tool System (42 declarations in BeatriceAgent.tsx)
 
-### Session Start
-```
-startSession()
-  │
-  ├── Build dynamicSystemInstruction
-  │     (VOICE_PERSONALITY_PROMPT + permissions + knowledge base)
-  │
-  ├── Create GoogleGenAI client
-  │
-  ├── Connect to Eburon Live:
-  │     model: "eburon_realtime_voice"
-  │     modalities: AUDIO
-  │     systemInstruction: dynamicSystemInstruction
-  │     tools: [17 tool declarations]
-  │
-  └── Attach onmessage handler
-```
+### WhatsApp (13 tools)
+`send_whatsapp_message`, `send_whatsapp_group_message`, `read_whatsapp_chats`, `get_whatsapp_contacts`, `get_whatsapp_groups`, `get_whatsapp_message_history`, `get_whatsapp_calls`, `block_whatsapp_contact`, `unblock_whatsapp_contact`, `read_whatsapp_attachment`, `transcribe_whatsapp_audio`, `send_whatsapp_document`, `sync_whatsapp_history`
 
-### `onmessage` Handler
-This single callback handles ALL incoming messages from Eburon Live:
-1. **Audio chunks** (`serverContent.modelTurn.parts[i].inlineData`): Decode base64 → play through AudioStreamer
-2. **Tool calls** (`serverContent.modelTurn.parts[i].functionCall`): Route to tool execution switch
-3. **Tool results**: Send back via `clientSocket.sendToolResponse()`
-4. **Transcript data** (`serverContent.modelTurn.parts[i].text`): Update transcript UI
-5. **Turn complete** (`serverContent.turnComplete`): Finalize audio, refresh transcript
-6. **Input audio transcription**: Display what user said
-7. **Errors**: Log and display error messages
+### Belgian Admin (10 tools)
+`belgian_company_lookup` (KBO/CBE), `belgian_vies_vat_validate`, `belgian_peppol_invoice`, `belgian_tax_calendar`, `belgian_registration_tax_calc`, `belgian_itsme_navigator`, `belgian_language_bridge` (FR/NL/EN), `belgian_social_security_navigator`, `belgian_labor_law_simplifier`, `belgian_mobility_planner` (NMBS/SNCB)
 
-### Audio Output Flow
-```
-Eburon Live API
-  → audio chunk (base64 PCM16)
-  → AudioStreamer.decodeAndEnqueue()
-  → AudioBuffer queue
-  → schedule next chunk via setTimeout based on duration
-  → AudioContext destination
-```
+### Memory (2)
+`add_to_memory`, `search_memory` — persisted in Supabase `memories` table
 
-### Session End
-- `stopSession()`: Close client socket, stop audio streamer, release mic, reset state
-- Auto-stop on error/fatal
-- Cleanup on unmount
+### Filesystem (local + server, 8)
+`local_connect_folder`, `local_list_directory`, `local_read_file`, `local_write_file`, `local_analyze_file`, `server_read_file`, `server_write_file`, `server_list_directory`
+
+### Document & Website (2)
+`create_document`, `generate_website` — both use Eburon text model to generate HTML, stored in workspace + Supabase
+
+### Browser Automation (2)
+`cerebras_browser_task` — Playwright automation on VPS, `cerebras_chat` — text generation via Cerebras
+
+### Sandbox (2)
+`run_sandbox_task` — delegates to backend sub-agent runner, `open_terminal_skills` — terminal-based app building via OpenCode CLI
+
+### Communication (4)
+`dial_contact` (native phone), `whatsapp_call`, `send_sms`, `handle_sms`
+
+### Call Handling (4)
+`handle_call_offer`, `end_call`, `mute_call`
+
+### Google (1 + sub-tools)
+`connect_google_account` — Google OAuth popup; Google tools (list_gmail_messages, list_calendar_events, etc.) are in a separate `googleTools` array
+
+### Other (7)
+`analyze_image`, `read_web_page`, `transcribe_audio`, `set_user_language`, `translate_message`, `get_user_location`, `set_user_reminder`, `create_calendar_event`, `search_youtube`
 
 ---
 
-## 7. Tool System
+## Key Files
 
-### Declared Tools (17 total)
+### Frontend (`src/`)
 
-| Tool Name | Purpose | Permission Required |
+| File | Lines | Role |
 |---|---|---|
-| `whatsapp_action` | Consolidated WhatsApp ops: send, chats, contacts, groups, history, status | varies by sub-action |
-| `dial_contact` | Open macOS phone dialer via AppleScript | `control_phone` |
-| `whatsapp_call` | Place WhatsApp voice/video call | `control_phone` |
-| `list_gmail_messages` | List Gmail inbox messages | — |
-| `list_calendar_events` | List Google Calendar events | — |
-| `list_google_tasks` | List Google Tasks | — |
-| `send_gmail_message` | Send email via Gmail | — |
-| `google_contacts` | Search Google Contacts | — |
-| `get_user_location` | Get user's approximate location via ipapi.co | — |
-| `create_document` | Generate HTML documents via separate Eburon session | — |
-| `web_glance` | Web search via DuckDuckGo API | `browse_web` |
-| `idle_web_glance` | Idle web glance (periodic) | `browse_web` |
-| `toggle_camera` | Start/stop camera feed | — |
-| `get_screenshot` | Capture screenshot for model analysis | — |
-| `execute_google_service` | Execute Google service operations | — |
-| `toggle_video_frame` | Send/stop video frames (base64) | — |
-| `switch_camera` | Switch between front/back camera | — |
+| `components/BeatriceAgent.tsx` | 6983 | Everything: prompt, session, tools, execution, UI. Single largest file. |
+| `components/ChatPage.tsx` | ~900 | Text chat UI with sandbox artifact display |
+| `components/VideoPage.tsx` | ~200 | Camera + screen sharing UI |
+| `components/ProfilePage.tsx` | ~400 | Persona, language, memory, knowledge files, workspace settings |
+| `components/WhatsAppSettings.tsx` | ~500 | Pairing, permission toggles, status display |
+| `components/WhatsAppPortal.tsx` | ~300 | Admin dashboard for WhatsApp |
+| `components/WhatsAppOnboarding.tsx` | ~300 | WhatsApp onboarding flow |
+| `components/DocumentViewer.tsx` | ~300 | Sandbox log viewer + artifact display |
+| `components/UnifiedTranscript.tsx` | ~200 | Animated word-by-word transcript |
+| `components/EntryFlow.tsx` | ~200 | Splash + auth routing |
+| `components/AuthPage.tsx` | ~300 | Auth UI + Google OAuth |
+| `components/FolderWatcher.tsx` | ~100 | Picks up local folder for file access |
+| `lib/audio.ts` | 403 | AudioStreamer (PCM16 playback), AudioRecorder (mic via AudioWorklet), AmbientConversationBed |
+| `lib/voiceSession.ts` | 54 | Sole `@google/genai` wrapper (branding-allowlisted) |
+| `lib/BeatriceMemoryService.ts` | ~400 | Memory CRUD, session context builder, time blocks |
+| `lib/workspace.ts` | 203 | IndexedDB workspace + Google Drive upload |
+| `lib/supabase.ts` | 40 | Supabase client + error handler |
+| `lib/supabaseStorage.ts` | ~200 | Supabase Storage file operations |
+| `lib/whatsappClient.ts` | 178 | WhatsApp backend API client + backend URL detection |
+| `lib/belgianClient.ts` | 26 | Belgian tool API client |
+| `lib/fastMultimodalClient.ts` | 190 | Fast multimodal SSE streaming client |
+| `lib/codeFilesClient.ts` | 75 | Monaco editor Supabase persistence |
+| `lib/db.ts` | 102 | Dexie/IndexedDB schema + BEATRICE_ONBOARDING_VERSION |
+| `lib/localFolder.ts` | ~80 | File System Access API helpers |
+| `lib/localFolderContext.tsx` | ~60 | React context for local folder |
+| `lib/env.ts` | 3 | Cross-runtime env var reader |
+| `lib/webClient.ts` | ~50 | Web glance API client |
+| `lib/kbSyncRegistry.ts` | ~50 | Knowledge base sync registry |
+| `lib/opfs.ts` | ~50 | Origin Private File System helpers |
+| `App.tsx` | 346 | Auth orchestrator, theme, onboarding routing |
+| `main.tsx` | 19 | Entry point + service worker registration |
+| `firebase.ts` | 16 | Firebase init (hardcoded config) |
+| `constants.ts` | 149 | 147-language LANGUAGES array |
+| `version.ts` | 27 | APP_VERSION, PWA versioning |
+| `index.css` | 235 | Tailwind v4 + CSS custom property theme system |
 
-### Tool Execution Architecture
-```
-Eburon Live → onmessage → functionCall detected
-  │
-  ▼
-switch(tool_name):
-  │
-  ├── "whatsapp_action"
-  │     → Check waPermissions[send_messages/read_chats/etc.]
-  │     → fetch POST /api/whatsapp/tool with permissions
-  │     → Return result
-  │
-  ├── "dial_contact"
-  │     → Check waPermissions.control_phone
-  │     → AppleScript `open location "tel://..."`
-  │
-  ├── "whatsapp_call"
-  │     → Check waPermissions.control_phone
-  │     → AppleScript `open location "https://wa.me/..."`
-  │
-  ├── "list_gmail_messages"
-  │     → Fetch from Gmail API with stored token
-  │     → Return formatted results
-  │
-  ├── "send_gmail_message"
-  │     → Fetch from Gmail API with stored token
-  │
-  ├── "list_calendar_events"
-  │     → Fetch from Google Calendar API
-  │
-  ├── "list_google_tasks"
-  │     → Fetch from Google Tasks API
-  │
-  ├── "google_contacts"
-  │     → Fetch from Google People API
-  │
-  ├── "get_user_location"
-  │     → fetch https://ipapi.co/json/
-  │
-  ├── "create_document"
-  │     → Create separate Eburon session (non-voice model)
-  │     → Generate HTML
-  │     → Return to model or open in new tab
-  │
-  ├── "web_glance"
-  │     → Check waPermissions.browse_web
-  │     → fetch POST /api/web/glance
-  │
-  └── Camera/video tools
-        → getUserMedia → base64 frames → send to model
-```
+### Backend (`server/`)
 
-### Key Patterns
-- **Consolidated tools**: `whatsapp_action` uses a sub-action parameter to handle 8+ different WhatsApp operations through a single tool declaration
-- **Client-side execution**: ALL tools execute in the browser — the server only proxies WhatsApp/Web Glance APIs
-- **Permission double-check**: First at declaration time (model decides whether to call), second at execution time (handler denies if permission off)
-- **Results flow**: Tool result is sent back via `clientSocket.sendToolResponse()` which feeds into the model's next turn
-
----
-
-## 8. Two-History System
-
-Beatrice maintains TWO separate sources of conversation history:
-
-### 1. BeatriceAppConversations (App Context Memory)
-- Stored in Firestore (`messages` collection)
-- Contains all conversations between user and Beatrice within the app
-- Immutable records — never edit or delete
-- Structured with role (`user`/`model`), text, timestamp
-
-### 2. WhatsApp History (Real WhatsApp Messages)
-- Retrieved via `getMessageHistory` tool during `whatsapp_action`
-- Fetched from the backend server's in-memory message store
-- Contains REAL WhatsApp conversations with contacts
-- Provides context so Beatrice can reference specific WhatsApp chats
-
-### Why Two?
-- The app history is Beatrice's memory of what she and the user discussed
-- The WhatsApp history is the user's REAL conversations with other people
-- Beatrice needs both to function as a WhatsApp assistant
-
----
-
-## 9. Audio Pipeline
-
-**File**: `src/lib/audio.ts`
-
-### AudioStreamer (TTS Playback)
-```typescript
-class AudioStreamer {
-  audioCtx: AudioContext
-  gainNode: GainNode
-  queue: AudioBuffer[]
-  isPlaying: boolean
-  sampleRate: number  // 24000 Hz
-
-  decodeAndEnqueue(base64PCM16: string)
-  playNext()
-  stop()
-  pause() / resume()
-}
-```
-
-- Decodes base64 → PCM16 samples → AudioBuffer (single channel, 24kHz)
-- Queues audio chunks and plays sequentially
-- Schedules next chunk playback based on audio duration
-- Supports pause/resume/stop
-
-### AudioRecorder (Mic Capture)
-```typescript
-class AudioRecorder {
-  stream: MediaStream
-  source: MediaStreamAudioSourceNode
-  processor: AudioWorkletNode | ScriptProcessorNode
-  isRecording: boolean
-
-  start(onChunk: (base64: string) => void)
-  stop()
-}
-```
-
-Captures microphone audio and sends as base64 chunks to the Eburon Live API.
-
-### AmbientConversationBed
-Ambient background audio (optional, experimental). Plays a subtle background sound to create an "ambient conversation space."
-
----
-
-## 10. Document Generation
-
-### Client-side Flow
-When `create_document` tool is called:
-
-1. Type is determined (webpage, dashboard, report/document, summarize, code)
-2. A SEPARATE Eburon session (non-voice model, `eburon_text`) is created
-3. A system prompt is sent based on document type:
-   - **webpage**: Landing page with nav, hero, feature cards, footer. Dark theme + peach accent.
-   - **dashboard**: Monitoring dashboard with metric cards, status indicators.
-   - **report/document**: CEO-grade comprehensive document, ≥800 words, proper structure.
-   - **summarize**: Structured summary.
-   - **code**: Production-ready code.
-4. HTML is returned to Eburon or opened in a new browser tab
-
-### Legacy Server-side (Ollama)
-`server/eburon.ts` contains an `EburonWorker` class that generates documents via Ollama (local LLM). This appears to be an older/alternative path — the primary document generation is now client-side via Eburon.
-
----
-
-## 11. WhatsApp Integration
-
-### Dual-Provider Architecture
-
-| Provider | Library | When Used |
+| File | Lines | Role |
 |---|---|---|
-| `linked_device` | Baileys (`@whiskeysockets/baileys`) | Default. WhatsApp Web protocol. Phone must be online. |
-| `cloud_api` | WhatsApp Cloud API (Meta Graph) | Fallback/alternative. Configured per-user in admin portal. |
+| `index.ts` | ~2100 | Express app: all API routes, sandbox sub-agent runner, OpenCode Zen fallback chain, WhatsApp SSE stream |
+| `whatsapp.ts` | ~1200 | WhatsAppManager: Baileys session lifecycle, message store, media cache, auto-reconnect |
+| `whatsapp-tools.ts` | ~800 | Permission-gated WhatsApp tool handlers (8 permission keys) |
+| `belgian-tools.ts` | ~700 | 10 Belgian admin tool implementations |
+| `eburon-provider.ts` | 431 | Eburon Core AI provider: model registry, generation functions, obfuscated model IDs |
+| `eburon.ts` | 138 | EburonWorker: Ollama-based local document/webpage generation |
+| `fast-multimodal.ts` | 463 | Server-side multimodal skills via SSE |
+| `coding-agent-runner.ts` | 867 | Multi-provider sub-agent runner (OpenCode, Gemini, Freebuff) |
+| `file-extractor.ts` | ~200 | File content extraction (documents, images, media) |
+| `supabase.ts` | ~30 | Server-side Supabase admin client |
+| `types.ts` | ~40 | TypeScript interfaces |
+| `api-spec.json` | — | Swagger API spec |
+| `db/index.ts` | 23 | DB layer exports: 7 repos + admin + server clients |
+| `db/workspace-storage.ts` | ~100 | Filesystem JSON workspace persistence |
+| `db/admin.ts` | — | Supabase admin client |
+| `db/server.ts` | — | Supabase server client |
+| `db/repositories/` | — | 7 repos: memory, messages, whatsapp, media, settings, eburon, code-files |
 
-### Frontend (User-facing)
-- **WhatsAppSettings.tsx**: Pairing via QR code or phone number, permission toggles, status display
-- Backend URL is stored in `localStorage` as `beatrice_backend_url` — auto-detects localhost vs production
+### Infrastructure
 
-### Backend (server/)
-- **WhatsAppManager** class manages per-user sessions
-- Sessions persisted via `useMultiFileAuthState` (saves `creds.json` to `.baileys_auth/<userId>/`)
+| File | Role |
+|---|---|
+| `vite.config.ts` | Vite + React + Tailwind v4. Proxies `/api`, `/site-build`, `/beatrice-workspace`, `/socket.io` to :4200. HMR toggle via `DISABLE_HMR`. Env injection with obfuscated fallback chains. |
+| `tsconfig.json` | path alias `@/*` → root, excludes `functions/` and `dist/` |
+| `package.json` | `name: "beatrice"`, scripts for dev/build/lint/docker/db/branding |
+| `Dockerfile` | Dokploy: node:22-alpine, Chromium for Puppeteer, runs tsx on port 10000 |
+| `Dockerfile.whatsapp` | WhatsApp: node:22-bookworm-slim, Playwright, Python venv, tsx on port 4200, host networking |
+| `docker-compose.whatsapp.yml` | Production config with OpenCode Zen model chain env vars, host networking |
+| `docker-compose.dokploy.yml` | Dokploy config, port-mapped :4200 |
+| `eslint.config.mjs` | Only checks Firebase `.rules` files — NOT TypeScript |
+| `functions/` | Node 20 Firebase Cloud Function proxy to VPS `168.231.78.113:4200` |
+| `supabase/` | Local Supabase config, migrations, seed.sql |
+| `.env.example` | All env vars: EBURON_*, SUPABASE_*, FIREBASE_*, GOOGLE_*, WA_*, CODING_AGENT_* |
+| `.env.whatsapp.example` | Docker-specific env vars (OLLAMA_BASE_URL via Docker gateway, GITHUB_TOKEN) |
+| `firebase.json` | Hosting SPA fallback + Functions proxy config |
+
+---
+
+## WhatsApp Integration
+
+### Dual Provider
+1. **Baileys** (primary) — `@whiskeysockets/baileys` v7, WhatsApp Web protocol, QR/pairing code
+2. **Cloud API** (fallback) — Meta Graph API, configured per-user via admin endpoints
+
+### Session Management
+- Per-user Baileys sessions persisted in `WA_AUTH_ROOT/<userId>/` (multi-file auth state)
 - Auto-reconnect with exponential backoff (2s → 5s → 10s → 30s → 60s)
-- Message history stored in memory (last 250 messages per user), periodically saved to disk
-- Contacts enriched with `savedName` (what user saved), `whatsappProfileName` (pushName), `verifiedName` (business)
-- JID resolution: name lookup (exact → notify → verified → partial) → phone number → raw JID
+- In-memory message history (last 250 per user), saved to disk periodically
+- Server housekeeping evicts stale sessions every 30 minutes
+- SSE stream at `GET /api/whatsapp/stream/:userId` for real-time message push
+- Enriched contacts: savedName, whatsappProfileName (pushName), verifiedName
 
-### Cloud API Support
-- Configured via `/api/whatsapp/admin/config` endpoints
-- Sends messages via `https://graph.facebook.com/<version>/<phoneNumberId>/messages`
-- Webhook verification at `/api/whatsapp/webhook/:userId`
-- Message ingestion from webhook payloads
+### Permission System (10 toggles)
+All default to `false`. Client + server double-check:
+1. `send_messages`, `read_chats`, `access_contacts`, `manage_contacts`
+2. `access_groups`, `send_group_messages`, `read_group_chats`, `view_message_history`
+3. `control_phone` (phone calls), `browse_web` (web search)
 
-### Permission Enforcement (Server-side)
-`server/whatsapp-tools.ts` has 8 permission keys, checked at runtime:
-```typescript
-['send_messages', 'read_chats', 'access_contacts', 'manage_contacts',
- 'access_groups', 'send_group_messages', 'read_group_chats', 'view_message_history']
-```
-
-### Key API Endpoints
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/whatsapp/pair` | Start pairing (QR or phone number) |
-| GET | `/api/whatsapp/status/:userId` | Get connection status |
-| GET | `/api/whatsapp/messages/:userId` | Get recent messages |
-| POST | `/api/whatsapp/send` | Send a text message |
-| POST | `/api/whatsapp/tool` | Execute any WhatsApp tool |
-| POST | `/api/whatsapp/disconnect` | Disconnect and delete session |
-| GET | `/api/whatsapp/admin/overview/:userId` | Admin dashboard data |
-| GET/POST | `/api/whatsapp/admin/config` | Admin config CRUD |
-| GET/POST | `/api/whatsapp/webhook/:userId` | Cloud API webhook |
-| POST | `/api/web/glance` | Web search (DuckDuckGo) |
+### Media Caching
+- On-disk cache: `<WA_AUTH_ROOT>/media/<userId>/<chatId>/<messageId>.data` + `.meta`
+- WhatsApp CDN fallback with `downloadContentFromMessage`
+- Media expires handling with proper 410 responses
 
 ---
 
-## 12. Google Services Integration
+## Branding Obfuscation System
 
-All Google services use OAuth 2.0 tokens stored in `localStorage`:
-- `beatrice_google_token` — Current access token
-- `beatrice_google_refresh_token` — Refresh token
-- `beatrice_google_uid` — Google user ID
+### `npm run check:eburon-branding` (`scripts/check-eburon-branding.mjs`)
+Bans 40+ upstream provider/model names from all tracked source/config files:
+`gemini`, `google-genai`, `openai`, `claude`, `llama`, `deepseek`, `ollama`, `mistral`, `qwen`, `groq`, `anthropic`, `huggingface`, `langchain`, `replicate`, plus regex for version-suffixed names (`gpt4`, `claude-3`, `gemini-2.5`, etc.)
 
-### Supported Services
+**Allowlisted locations** (tokens permitted):
+- `AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, `TASK.md`
+- Binary/artifact formats (`.png`, `.svg`, `.mmd`, `.mp3`)
+- `scripts/check-eburon-branding.mjs` itself (self-reference)
+- `src/lib/voiceSession.ts` (sole client-side SDK wrapper)
 
-| Service | Tool | API Endpoint |
-|---|---|---|
-| Gmail (list) | `list_gmail_messages` | `https://gmail.googleapis.com/gmail/v1/users/me/messages` |
-| Gmail (send) | `send_gmail_message` | `https://gmail.googleapis.com/gmail/v1/users/me/messages/send` |
-| Calendar | `list_calendar_events` | `https://www.googleapis.com/calendar/v3/calendars/primary/events` |
-| Tasks | `list_google_tasks` | `https://tasks.googleapis.com/tasks/v1/users/@me/lists` |
-| Contacts | `google_contacts` | `https://people.googleapis.com/v1/people/me/connections` |
-
-### Auth Flow
-Google OAuth is initiated from `AuthPage.tsx` via Firebase `signInWithPopup(GoogleAuthProvider)`. The resulting credential's access token is stored in localStorage. Token refresh is handled by Firebase automatically, but the app also stores the refresh token for direct API calls.
+**Obfuscation techniques used**:
+- `String.fromCharCode()` in `server/eburon-provider.ts` for model IDs
+- String concatenation in `vite.config.ts`: `'GEM' + 'INI_API_KEY'`
+- String concatenation in `server/index.ts`: `'EBU' + 'RON_CORE_KEY'`, `'GEM' + 'INI_API_KEY'`
+- String concatenation in `BeatriceAgent.tsx`: `['Goo', 'gle', 'Gen', 'AI'].join('')`
 
 ---
 
-## 13. Camera & Video
+## Two-History System
 
-- Enabled by `toggle_camera` and `get_screenshot` tools
-- Uses `navigator.mediaDevices.getUserMedia()` to get video stream
-- Frames captured via `<canvas>` and sent as base64 JPEG to Eburon Live
-- `switch_camera` tool toggles between front and back cameras (`facingMode: 'user'` vs `'environment'`)
-- Video stream rendered in a small floating preview in the UI
-- Can be toggled on/off during conversation
+1. **BeatriceAppConversations** — conversation history between user and Beatrice within the app. Stored in Supabase `messages` table. Used for session context and personal relationship memory.
+2. **WhatsApp History** — user's real WhatsApp conversations with other people. Synced via Baileys on pairing. Full history sync enabled by default. Accessible via `get_whatsapp_message_history`. Separate from app conversation memory — never confuse the two.
 
 ---
 
-## 14. Database
+## Key Architecture Decisions
 
-### Firebase Firestore
-
-**Collections:**
-| Collection | Document ID | Fields |
-|---|---|---|
-| `messages` | Auto-ID | `userId`, `role` (user/model), `text`, `timestamp`, `personaName` |
-| `user_settings` | `userId` | `permissions` (map of 10 booleans), `personaName`, `customPrompt` |
-
-**Rules:**
-- Messages are immutable: `allow update, delete: if false`
-- User isolation: each user can only read/write their own data
-- Timestamp validation: `== request.time`
-- Field validation by whitelist
-- Length limits: `personaName` ≤ 50, `customPrompt` ≤ 2000, `message.text` ≤ 5000
-
-### Supabase
-
-**Tables:**
-- `messages` — Same structure as Firestore messages (dual-write or migration path)
-- `user_settings` — User settings including permissions and persona config
-- `knowledge_files` — User-uploaded files (avatars, knowledge base documents)
-
-**Storage:**
-- `knowledge_files` bucket for user-uploaded knowledge files
-- Avatar images stored per-user
+1. **One-file app**: `BeatriceAgent.tsx` (6983 lines) contains the personality prompt, all tool declarations, the session lifecycle, the message handler, and the entire UI render. Adding a feature means: add tool declaration → add switch case → add UI.
+2. **Client-executed tools**: All tools execute in the browser. The server only proxies WhatsApp, Belgian tool, and AI calls.
+3. **Session-frozen system prompt**: The system instruction is assembled once before `startSession()` and is immutable for the session lifetime. Permission changes require session restart.
+4. **PCM16 audio pipeline**: 24kHz playback (AudioStreamer), 48kHz→16kHz downsampled mic capture (AudioRecorder via AudioWorkletNode).
+5. **OpenCode Zen fallback chain**: The sub-agent runner tries up to 6 OpenCode free models in sequence on quota errors, then falls back to Cerebras, then Ollama.
+6. **No test framework**: Manual verification only. `lint` = `tsc --noEmit` (no ESLint on TS code).
+7. **Three deploy paths**: Docker (WhatsApp host networking), Dokploy (port-mapped), Firebase Hosting + Functions (proxied to VPS).
 
 ---
 
-## 15. Server Backend
+## Critical Rules & Pitfalls
 
-**Directory**: `server/`
-**Entry**: `server/index.ts`
-**Port**: 4200 (configurable via `SANDBOX_PORT` env var)
-
-### Files
-
-| File | Purpose |
-|---|---|
-| `index.ts` | Express app, all routes, middleware |
-| `whatsapp.ts` | `WhatsAppManager` class — full WhatsApp session lifecycle |
-| `whatsapp-tools.ts` | Permission-gated WhatsApp tool handlers |
-| `eburon.ts` | Legacy Ollama-based document generator (`EburonWorker`) |
-| `types.ts` | TypeScript interfaces for sandbox tasks |
-
-### Running the Server
-```bash
-npm run dev    # Starts Vite dev server (port 3000) — does NOT start backend
-```
-The backend server must be started separately:
-```bash
-cd server && npx tsx index.ts
-# or if using the project's package:
-npx tsx server/index.ts
-```
-
----
-
-## 16. Key Files & Responsibilities
-
-### Source Files
-
-| File | Size | Responsibility |
-|---|---|---|
-| `src/components/BeatriceAgent.tsx` | ~3642 lines | Everything: prompt, session, tools, execution, UI |
-| `src/App.tsx` | ~200 lines | Auth state orchestrator, routing |
-| `src/components/AuthPage.tsx` | ~300 lines | Auth UI + Google OAuth |
-| `src/components/EntryFlow.tsx` | ~200 lines | Splash + Onboarding flow |
-| `src/components/WhatsAppSettings.tsx` | ~300 lines | WhatsApp pairing + permission toggles |
-| `src/components/ProfilePage.tsx` | ~250 lines | User profile + knowledge files management |
-| `src/components/ChatPage.tsx` | — | Chat UI for non-voice mode |
-| `src/components/UnifiedTranscript.tsx` | — | Animated word-by-word transcript |
-| `src/lib/audio.ts` | ~200 lines | AudioStreamer + AudioRecorder |
-| `src/lib/whatsappClient.ts` | ~150 lines | WhatsApp backend API client |
-| `src/lib/supabase.ts` | ~50 lines | Supabase client setup |
-| `src/lib/supabaseStorage.ts` | ~150 lines | File upload/list/delete to Supabase Storage |
-| `src/lib/webClient.ts` | ~50 lines | Web glance API client |
-| `src/firebase.ts` | ~50 lines | Firebase init + error handler |
-| `src/constants.ts` | ~200 lines | Language list (~190 languages) |
-| `src/index.css` | 1 line | `@import "tailwindcss"` |
-
-### Config Files
-
-| File | Purpose |
-|---|---|
-| `vite.config.ts` | Vite config: path alias, Tailwind v4, env injection |
-| `package.json` | Dependencies, scripts |
-| `tsconfig.json` | TypeScript config |
-| `.env.example` | All env vars with descriptions |
-| `supabase-migration.sql` | Full Supabase schema |
-| `firebase-applet-config.json` | Firebase project config |
-| `firebase-blueprint.json` | Firestore schema blueprint |
-| `firestore.rules` | Firestore security rules |
-| `public/reference-ui.html` | Canonical landing page design reference |
-
-### Server Files
-
-| File | Purpose |
-|---|---|
-| `server/index.ts` | Express app, all API routes |
-| `server/whatsapp.ts` | WhatsAppManager (Baileys + Cloud API) |
-| `server/whatsapp-tools.ts` | Permission-gated tool handlers |
-| `server/eburon.ts` | Legacy Ollama document generation |
-| `server/types.ts` | Sandbox task types |
-
----
-
-## 17. Development Setup
-
-### Prerequisites
-- Node.js 18+
-- A Eburon Core key (`.env.local` → `EBURON_CORE_KEY`)
-- Firebase project (config hardcoded in `firebase.ts`)
-- Supabase project (URL + anon key in `.env.local`)
-
-### Install & Run
-```bash
-cd /path/to/voxx
-npm install
-cp .env.example .env.local    # Fill in EBURON_CORE_KEY + Supabase + Firebase vars
-npm run dev                    # Vite at http://localhost:3000
-
-# In separate terminal (for WhatsApp support):
-npx tsx server/index.ts        # Backend at http://localhost:4200
-```
-
-### Environment Variables
-| Variable | Required | Description |
-|---|---|---|
-| `EBURON_CORE_KEY` | Yes | API key for Eburon Core |
-| `VITE_SANDBOX_URL` | Backend | Backend URL (default: http://localhost:4200) |
-| `SANDBOX_PORT` | Backend | Server port (default: 4200) |
-| `SANDBOX_ROOT` | Backend | Output directory for generated artifacts |
-| `WA_AUTH_ROOT` | Backend | WhatsApp auth data directory |
-| `WA_LOG_LEVEL` | No | Baileys log level: silent/error/warn/info/debug |
-| `VITE_GOOGLE_CLIENT_ID` | Google OAuth | Google OAuth client ID |
-| `GOOGLE_CLIENT_ID` | Google OAuth | Server-side Google client ID |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth | Server-side Google client secret |
-| `VITE_FIREBASE_*` | Firebase | Firebase config (API key, project ID, etc.) |
-| `APP_URL` | Deploy | Auto-injected by AI Studio for Cloud Run |
-| `DISABLE_HMR` | No | Set `true` to disable HMR (AI Studio compat) |
-
-### Available Commands
-```bash
-npm run dev    # Start Vite dev on port 3000
-npm run build  # Production build
-npm run lint   # TypeScript type-check (tsc --noEmit) only
-```
-There is no test framework, no CI, no pre-commit hooks.
-
----
-
-## 18. Critical Rules & Pitfalls
-
-### VOICE_PERSONALITY_PROMPT
-- **DO NOT** edit casually. It defines the entire agent persona. Small changes alter Beatrice's behavior dramatically.
-- It's hardcoded in `BeatriceAgent.tsx` — not a separate file, not an import.
-- The prompt uses Irish English grammar — keep consistent if editing.
-
-### Permission System
-- **Permissions default to ALL FALSE**. Never change defaults.
-- Permission changes require session reconnect (system instruction frozen per session).
-- Two permission checkpoints: model-level (system instruction) + execution-level (handler).
-
-### Eburon Live Session
-- System instruction is FIXED for the lifetime of a Live session. Dynamic prompts are assembled before `startSession()`.
-- Audio modality is PCM16, single channel, 24kHz sample rate.
-- Tool results are sent back via `clientSocket.sendToolResponse()`, NOT as a return value.
-
-### The `onmessage` Callback
-- This is a SINGLE function that handles ALL Eburon Live events. Adding a new tool?
-  1. Add tool declaration to the declarations array
-  2. Add execution case to the switch statement
-  3. Both inside the same `onmessage` closure
-
-### Server & WhatsApp
-- Backend server is SEPARATE from Vite — must be started manually.
-- WhatsApp Baileys sessions are stored in `.baileys_auth/<userId>/`. Delete these to force re-pair.
-- Auto-reconnect has exponential backoff — can take up to 60s between retries.
-- Message history is IN-MEMORY (last 250 messages). Not persisted long-term.
-
-### Google OAuth
-- Tokens stored in `localStorage` — lost on browser clear or incognito.
-- Token refresh is handled by Firebase, but direct API calls use the stored token.
-- User must re-link Google account if tokens expire.
-
-### Document Generation
-- Creates a SEPARATE Eburon session (non-voice), which costs additional tokens.
-- The system prompts for doc types are duplicated: one set in the `VOICE_PERSONALITY_PROMPT` (for the model's reference) and one set actually used in the generation call.
-
-### Messages are Immutable
-- Firestore rules prevent updating or deleting messages.
-- Never attempt to edit/delete messages in code.
-
-### No Tests, No CI
-- There is zero test coverage. No CI pipeline.
-- `npm run lint` runs only `tsc --noEmit` — no ESLint, no Prettier.
-- Validate changes by running the app and testing manually.
-
-### BeatriceAgent.tsx Size
-- **3642 lines, ~2MB**. This is the single most critical file.
-- When editing, be careful of the massive `switch` statement in `onmessage`.
-- Always search for existing patterns before adding new code.
-- The file mixes prompt engineering, API integration, state management, and UI rendering in one component.
+- **System prompt is hardcoded**: `VOICE_PERSONALITY_PROMPT` (~650 lines) is a template string in `BeatriceAgent.tsx`. Changing it alters the entire agent persona.
+- **Permissions default FALSE**: All 10 WhatsApp permissions start disabled. Never change defaults.
+- **Two permission gates**: Model-level (system instruction) + execution-level (handler switch) — both must pass.
+- **Branding check blocks edits**: You cannot write upstream provider names (gemini, claude, openai, etc.) in source files unless they're in the allowlist. Use Eburon aliases or String.fromCharCode.
+- **LEGEND.md is gitignored**: Maps Eburon model aliases to upstream IDs. Not in repo but exists at project root.
+- **Functions have separate Node version**: `functions/` runs Node 20 (root uses Node 22). Its `package.json` has its own `engines.node`.
+- **Vite proxies /api to :4200**: During frontend dev (`:3000`), all `/api/*` calls go to the backend. The backend must be running separately.
+- **Keep `dist/` built for Docker**: `Dockerfile.whatsapp` copies `dist/` — run `npm run build` before `docker:whatsapp:build`.
+- **HMR can cause flickering**: Set `DISABLE_HMR=true` during AI editing sessions.
+- **Do not edit `src/lib/voiceSession.ts` casually**: It's the branding-allowlisted SDK wrapper. All other files must use Eburon abstractions.

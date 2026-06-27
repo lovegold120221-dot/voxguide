@@ -10,12 +10,17 @@ import {
   validateEburonConfig,
   generateEburonWorker,
   generateEburonSandbox,
-  generateEburonText,
   generateEburonVision,
   transcribeEburonAudio,
-  createEburonClient,
   resolveEburonModelAlias,
 } from './eburon-provider';
+import {
+  streamFastMultimodal,
+  validateFastMultimodalConfig,
+  FAST_MULTIMODAL_SKILLS,
+  type FastMultimodalRequest,
+} from './fast-multimodal';
+import { CodeFilesRepo } from './db';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,6 +35,10 @@ import { CodingAgentRunner } from './coding-agent-runner';
 const eburonWarnings = validateEburonConfig();
 if (eburonWarnings.length > 0 && process.env.NODE_ENV !== 'production') {
   console.warn('[Eburon] Startup warnings:', eburonWarnings);
+}
+const fastMultimodalWarnings = validateFastMultimodalConfig();
+if (fastMultimodalWarnings.length > 0 && process.env.NODE_ENV !== 'production') {
+  console.warn('[FastMultimodal] Startup warnings:', fastMultimodalWarnings);
 }
 
 const app = express();
@@ -193,6 +202,129 @@ app.post('/api/eburon/transcribe-audio', async (req, res) => {
     res.json({ ok: true, transcript: result.text });
   } catch (err: any) {
     res.status(500).json({ error: getMsg(err) });
+  }
+});
+
+// ── Fast Multimodal Skills (Eburon AI) ──
+
+app.get('/api/ai/fast-multimodal/skills', (_req, res) => {
+  res.json({ ok: true, skills: FAST_MULTIMODAL_SKILLS, provider: 'Eburon AI' });
+});
+
+app.post('/api/ai/fast-multimodal', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const request: FastMultimodalRequest = {
+      userId: body.userId,
+      sessionId: body.sessionId,
+      skill: body.skill || 'auto',
+      prompt: body.prompt || '',
+      systemInstruction: body.systemInstruction,
+      inlineData: body.inlineData,
+      ocrMode: body.ocrMode,
+      fileUri: body.fileUri,
+      fileMimeType: body.fileMimeType,
+      codeContext: body.codeContext,
+      temperature: body.temperature,
+      maxOutputTokens: body.maxOutputTokens,
+      timeoutSec: body.timeoutSec,
+    };
+
+    if (!request.userId) { res.status(400).json({ error: 'userId is required' }); return; }
+    if (!request.prompt && !request.inlineData && !request.fileUri && !request.codeContext?.currentFile) {
+      res.status(400).json({ error: 'prompt, inlineData, fileUri, or codeContext is required' });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    let closed = false;
+    const send = (event: any) => {
+      if (closed) return;
+      try { res.write(`data: ${JSON.stringify(event)}\n\n`); } catch {}
+    };
+    const keepalive = setInterval(() => {
+      if (closed) return;
+      try { res.write(':keepalive\n\n'); } catch { clearInterval(keepalive); }
+    }, 25000);
+
+    req.on('close', () => {
+      closed = true;
+      clearInterval(keepalive);
+    });
+
+    await streamFastMultimodal(request, send);
+    if (!closed) {
+      clearInterval(keepalive);
+      try { res.end(); } catch {}
+    }
+  } catch (err: any) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Fast multimodal request failed' });
+    } else {
+      try { res.write(`data: ${JSON.stringify({ type: 'error', message: 'Fast multimodal request failed' })}\n\n`); res.end(); } catch {}
+    }
+  }
+});
+
+// Dedicated code-completion route (streams a single completion/patch/full-file).
+app.post('/api/ai/code-completion', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const request: FastMultimodalRequest = {
+      userId: body.userId,
+      sessionId: body.sessionId,
+      skill: 'code_completion',
+      prompt: body.prompt || '',
+      systemInstruction: body.systemInstruction,
+      codeContext: body.codeContext,
+      temperature: body.temperature ?? 0.2,
+      maxOutputTokens: body.maxOutputTokens,
+      timeoutSec: body.timeoutSec ?? 60,
+    };
+
+    if (!request.userId) { res.status(400).json({ error: 'userId is required' }); return; }
+    if (!request.codeContext?.currentFile && !request.prompt) {
+      res.status(400).json({ error: 'codeContext.currentFile or prompt is required' });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    let closed = false;
+    const send = (event: any) => {
+      if (closed) return;
+      try { res.write(`data: ${JSON.stringify(event)}\n\n`); } catch {}
+    };
+    const keepalive = setInterval(() => {
+      if (closed) return;
+      try { res.write(':keepalive\n\n'); } catch { clearInterval(keepalive); }
+    }, 25000);
+
+    req.on('close', () => {
+      closed = true;
+      clearInterval(keepalive);
+    });
+
+    await streamFastMultimodal(request, send);
+    if (!closed) {
+      clearInterval(keepalive);
+      try { res.end(); } catch {}
+    }
+  } catch (err: any) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Code completion request failed' });
+    } else {
+      try { res.write(`data: ${JSON.stringify({ type: 'error', message: 'Code completion request failed' })}\n\n`); res.end(); } catch {}
+    }
   }
 });
 
@@ -1310,6 +1442,13 @@ const codingAgentRunner = new CodingAgentRunner({
   callCerebras: (system, prompt, timeout, maxTokens) =>
     callCerebras(system, prompt, timeout, maxTokens),
 });
+
+// Pipe runner events to the SSE event bus so streaming clients receive updates
+const _runnerEmit = codingAgentRunner.emit.bind(codingAgentRunner);
+codingAgentRunner.emit = function (event: string, ...args: any[]) {
+  codingStreamEmitter.emit(event, ...args);
+  return _runnerEmit(event, ...args);
+};
 
 /**
  * POST /api/coding-agent/run
@@ -2436,6 +2575,66 @@ app.delete('/api/workspace/delete/:id', async (req, res) => {
   }
 });
 
+// ── Code Files API (Monaco editor Supabase persistence) ──
+
+app.get('/api/code-files/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const sessionId = String(req.query.sessionId || '') || undefined;
+    if (!userId) { res.status(400).json({ error: 'userId required' }); return; }
+    const result = await CodeFilesRepo.listCodeFiles(userId, sessionId);
+    if (!result.ok) { res.status(500).json({ error: result.error }); return; }
+    res.json({ ok: true, files: result.data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'List failed' });
+  }
+});
+
+app.get('/api/code-files/:userId/file', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const filePath = String(req.query.path || '');
+    if (!userId || !filePath) { res.status(400).json({ error: 'userId and path required' }); return; }
+    const result = await CodeFilesRepo.getCodeFile(userId, filePath);
+    if (!result.ok) { res.status(500).json({ error: result.error }); return; }
+    res.json({ ok: true, file: result.data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Get failed' });
+  }
+});
+
+app.post('/api/code-files', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.userId || !body.filePath) { res.status(400).json({ error: 'userId and filePath required' }); return; }
+    const result = await CodeFilesRepo.upsertCodeFile({
+      user_id: body.userId,
+      session_id: body.sessionId,
+      project_id: body.projectId,
+      file_path: body.filePath,
+      language: body.language || 'plaintext',
+      content: body.content ?? '',
+    });
+    if (!result.ok) { res.status(500).json({ error: result.error }); return; }
+    res.json({ ok: true, id: result.id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Save failed' });
+  }
+});
+
+app.delete('/api/code-files/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const filePath = String(req.query.path || '');
+    if (!userId || !filePath) { res.status(400).json({ error: 'userId and path required' }); return; }
+    const result = await CodeFilesRepo.deleteCodeFile(userId, filePath);
+    if (!result.ok) { res.status(500).json({ error: result.error }); return; }
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Delete failed' });
+  }
+});
+
 // ── Server-side filesystem access (VPS files) ──
 
 const FILESYSTEM_ROOT = path.resolve(process.env.WORKSPACE_DATA_DIR || '/data/workspace');
@@ -2556,7 +2755,7 @@ app.post('/api/server/terminal/run', async (req, res) => {
     }
     
     // Execute terminal command
-    const { exec } = await import('child_process');
+    const { exec } = await import('node:child_process/promises');
     const { stdout, stderr } = await exec(command, {
       cwd: workspacePath,
       timeout: timeout * 1000,
@@ -2627,7 +2826,7 @@ app.post('/api/server/terminal/clone-site', async (req, res) => {
     // Build wget command with mirror flags
     const wgetCmd = `wget --mirror --convert-links --adjust-extension --page-requisites --no-parent --directory-prefix="${cloneDir}" "${url}"`;
     
-    const { exec } = await import('child_process');
+    const { exec } = await import('node:child_process/promises');
     const { stdout, stderr } = await exec(wgetCmd, {
       cwd: FILESYSTEM_ROOT,
       timeout: timeout * 1000,

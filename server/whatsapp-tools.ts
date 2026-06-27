@@ -285,15 +285,6 @@ export async function handleWhatsAppAction(
       case 'sendTemplate':
         return { ok: true, result: await wa.sendWhatsAppTemplate(userId, pickWhatsAppRecipient(params), params.templateName, params.languageCode, params.components) };
 
-      case 'getCloudBusinessProfile':
-        return { ok: true, profile: await wa.getCloudBusinessProfile(userId) };
-
-      case 'updateCloudBusinessProfile':
-        return { ok: true, result: await wa.updateCloudBusinessProfile(userId, params) };
-
-      case 'updateCloudBusinessAvatar':
-        return { ok: true, result: await wa.updateCloudBusinessAvatar(userId, params.mediaUrl || params.url) };
-
       // ─── SENDING (REQUIRES APPROVAL) ───────────────────────────────
       case 'sendMessage':
       case 'sendGroupMessage':

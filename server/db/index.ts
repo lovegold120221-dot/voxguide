@@ -7,6 +7,7 @@ import * as WhatsAppRepo from './repositories/whatsapp.repo';
 import * as MediaRepo from './repositories/media.repo';
 import * as SettingsRepo from './repositories/settings.repo';
 import * as EburonRepo from './repositories/eburon.repo';
+import * as CodeFilesRepo from './repositories/code-files.repo';
 
 export {
   MemoryRepo,
@@ -15,6 +16,7 @@ export {
   MediaRepo,
   SettingsRepo,
   EburonRepo,
+  CodeFilesRepo,
 };
 
 export { supabaseClient, getSupabaseClient } from './server';

@@ -11,7 +11,12 @@ import {
   deleteKnowledgeFile,
   updateKnowledgeDomains,
 } from '../lib/supabaseStorage';
-import { listOutputs, deleteOutput, type WorkspaceOutput } from '../lib/workspace';
+import { 
+  listOutputs, 
+  deleteOutput, 
+  type WorkspaceOutput 
+} from '../lib/workspace';
+import { getBackendUrl } from '../lib/whatsappClient';
 import { LANGUAGES } from '../constants';
 import { getEnv } from '../lib/env';
 import { LocalFolderPanel } from './LocalFolderPanel';
@@ -111,20 +116,33 @@ export function ProfilePage({
   const loadWorkspace = async () => {
     setLoadingWorkspace(true);
     try {
-      let outputs = await listOutputs(user.uid);
-      // If IndexedDB is empty, fetch from server filesystem instead
-      if (outputs.length === 0) {
-        try {
-          const resp = await fetch(`/api/workspace/list/${encodeURIComponent(user.uid)}`);
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data.outputs && Array.isArray(data.outputs)) {
-              outputs = data.outputs;
-            }
+      const localOutputs = await listOutputs(user.uid);
+      
+      let serverOutputs: WorkspaceOutput[] = [];
+      try {
+        const resp = await fetch(`/api/workspace/list/${encodeURIComponent(user.uid)}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.outputs && Array.isArray(data.outputs)) {
+            serverOutputs = data.outputs;
           }
-        } catch {}
+        }
+      } catch (e) {
+        console.warn('Failed to fetch server workspace outputs:', e);
       }
-      setWorkspaceOutputs(outputs);
+
+      // Merge local and server outputs, prioritizing server for the same ID
+      const mergedMap = new Map<string, WorkspaceOutput>();
+      
+      // First add local
+      localOutputs.forEach(out => mergedMap.set(out.id, out));
+      // Then overwrite/add server
+      serverOutputs.forEach(out => mergedMap.set(out.id, out));
+
+      const combined = Array.from(mergedMap.values())
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        
+      setWorkspaceOutputs(combined);
     } catch (e) {
       console.error('Failed to load workspace:', e);
     } finally {
@@ -135,7 +153,19 @@ export function ProfilePage({
   const handleWorkspaceDelete = async (id: string) => {
     setDeletingWorkspaceId(id);
     try {
+      // 1. Delete from IndexedDB
       await deleteOutput(id);
+
+      // 2. Delete from server (if it's a server-side item)
+      try {
+        const backendUrl = getBackendUrl();
+        await fetch(`${backendUrl}/api/workspace/delete/${id}?userId=${user.uid}`, {
+          method: 'DELETE',
+        });
+      } catch (e) {
+        console.warn('Failed to delete workspace item from server:', e);
+      }
+
       setWorkspaceOutputs(prev => prev.filter(w => w.id !== id));
     } catch (e: any) {
       setError(e.message || 'Failed to delete');

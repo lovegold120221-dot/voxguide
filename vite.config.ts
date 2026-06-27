@@ -21,6 +21,16 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
+      port: 3000,
+      proxy: {
+        '/api': 'http://localhost:4200',
+        '/site-build': 'http://localhost:4200',
+        '/beatrice-workspace': 'http://localhost:4200',
+        '/socket.io': {
+          target: 'http://localhost:4200',
+          ws: true,
+        },
+      },
       headers: {
         'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
       },

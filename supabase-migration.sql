@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
   persona_name TEXT DEFAULT 'Beatrice',
   custom_prompt TEXT DEFAULT '',
   selected_voice TEXT DEFAULT 'Aoede',
-  context_size INT DEFAULT 20,
+  context_size INT DEFAULT 500,
   user_title TEXT DEFAULT 'Boss',
   language TEXT DEFAULT 'en',
   avatar_url TEXT,

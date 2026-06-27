@@ -1,6 +1,20 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Send, ArrowDown, MessageSquare, ChevronLeft, Menu, Paperclip } from 'lucide-react';
+import { 
+  X, 
+  Send, 
+  ArrowDown, 
+  MessageSquare, 
+  ChevronLeft, 
+  Menu, 
+  Paperclip, 
+  Link, 
+  Search, 
+  Youtube, 
+  ScanText, 
+  Code, 
+  Sparkles 
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 interface ChatMessage {
@@ -33,7 +47,20 @@ interface ChatPageProps {
   personaName: string;
   userName: string;
   onFileAttach?: (file: File) => void;
+  onSkillSelect?: (skill: string) => void;
+  selectedSkill?: string;
 }
+
+const formatSessionDate = (dateStr: string | number | Date): string => {
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+  } catch {
+    return String(dateStr);
+  }
+};
 
 const formatTime = (ts: any): string => {
   if (!ts) return '';
@@ -45,17 +72,14 @@ const formatTime = (ts: any): string => {
   }
 };
 
-const formatSessionDate = (d: Date): string => {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-
-  if (target.getTime() === today.getTime()) return 'Today';
-  if (target.getTime() === yesterday.getTime()) return 'Yesterday';
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-};
+const SKILLS = [
+  { id: 'url_context', label: 'URL', icon: Link },
+  { id: 'google_grounding', label: 'Search', icon: Search },
+  { id: 'youtube_analysis', label: 'YouTube', icon: Youtube },
+  { id: 'ocr', label: 'OCR', icon: ScanText },
+  { id: 'code_completion', label: 'Code', icon: Code },
+  { id: 'auto', label: 'Auto', icon: Sparkles },
+] as const;
 
 export function ChatPage({
   messages,
@@ -70,6 +94,8 @@ export function ChatPage({
   personaName,
   userName,
   onFileAttach,
+  onSkillSelect,
+  selectedSkill,
 }: ChatPageProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -391,46 +417,67 @@ export function ChatPage({
             )}
           </AnimatePresence>
 
-          {/* ── Input footer ── */}
-          <footer className="sticky bottom-0 w-full bg-[var(--bg-glass)] backdrop-blur-2xl border-t border-[var(--border)] px-2 sm:px-3 py-2 sm:py-2.5 z-10 shrink-0">
-            <form onSubmit={onSend} className="flex gap-1.5 sm:gap-2 items-center">
-              <button
-                type="button"
-                onClick={handleFileAttach}
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-zinc-900/90 border border-zinc-800 text-zinc-500 hover:text-[#d0a78b] hover:border-[#d0a78b]/30 flex items-center justify-center shrink-0 transition-all"
-                aria-label="Attach file"
-              >
-                <Paperclip className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                className="hidden"
-                accept="image/*,.pdf,.doc,.docx,.txt"
-                aria-label="Attach file"
-                title="Attach file"
-                onChange={handleFileChange}
-              />
-              <input
-                ref={inputRef}
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder={isActive ? `Message ${personaName}...` : 'Session not active. Start voice first.'}
-                disabled={!isActive}
-                className="flex-1 bg-[var(--bg-elevated)] text-xs sm:text-sm text-[var(--text-primary)] px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]/50 placeholder-[var(--text-muted)] disabled:opacity-50 min-w-0"
-              />
-              <button
-                type="submit"
-                disabled={!isActive || !chatInput.trim()}
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[var(--accent)] text-[var(--accent-text)] flex items-center justify-center hover:brightness-110 transition-all disabled:opacity-30 shrink-0"
-                aria-label="Send message"
-                title="Send message"
-              >
-                <Send className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              </button>
-            </form>
-          </footer>
+      {/* ── Input footer ── */}
+      <footer className="sticky bottom-0 w-full bg-[var(--bg-glass)] backdrop-blur-2xl border-t border-[var(--border)] px-2 sm:px-3 py-2 sm:py-2.5 z-10 shrink-0">
+        <form onSubmit={onSend} className="flex flex-col gap-2">
+          {isActive && (
+            <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+              {SKILLS.map(skill => (
+                <button
+                  key={skill.id}
+                  type="button"
+                  onClick={() => onSkillSelect?.(skill.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-[10px] sm:text-xs transition-all shrink-0 whitespace-nowrap ${
+                    selectedSkill === skill.id
+                      ? 'bg-[var(--accent)]/15 border-[var(--accent)] text-[var(--accent)]'
+                      : 'bg-[var(--bg-elevated)] border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)]/30'
+                  }`}
+                >
+                  <skill.icon className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                  {skill.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-1.5 sm:gap-2 items-center">
+            <button
+              type="button"
+              onClick={handleFileAttach}
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-zinc-900/90 border border-zinc-800 text-zinc-500 hover:text-[#d0a78b] hover:border-[#d0a78b]/30 flex items-center justify-center shrink-0 transition-all"
+              aria-label="Attach file"
+            >
+              <Paperclip className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept="image/*,.pdf,.doc,.docx,.txt"
+              aria-label="Attach file"
+              title="Attach file"
+              onChange={handleFileChange}
+            />
+            <input
+              ref={inputRef}
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder={isActive ? `Message ${personaName}...` : 'Session not active. Start voice first.'}
+              disabled={!isActive}
+              className="flex-1 bg-[var(--bg-elevated)] text-xs sm:text-sm text-[var(--text-primary)] px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]/50 placeholder-[var(--text-muted)] disabled:opacity-50 min-w-0"
+            />
+            <button
+              type="submit"
+              disabled={!isActive || !chatInput.trim()}
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[var(--accent)] text-[var(--accent-text)] flex items-center justify-center hover:brightness-110 transition-all disabled:opacity-30 shrink-0"
+              aria-label="Send message"
+              title="Send message"
+            >
+              <Send className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            </button>
+          </div>
+        </form>
+      </footer>
         </div>
       </div>
     </motion.div>

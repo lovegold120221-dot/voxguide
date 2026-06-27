@@ -31,7 +31,7 @@ DO $$ BEGIN
 END $$;
 
 -- Add missing columns (idempotent)
-ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS context_size INTEGER DEFAULT 20;
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS context_size INTEGER DEFAULT 500;
 ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS theme TEXT DEFAULT 'dark';
 ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN DEFAULT true;
 ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS ambient_volume INTEGER DEFAULT 12;

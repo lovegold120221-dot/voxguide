@@ -81,6 +81,7 @@ interface ChatMessage {
   timestamp: any;
   attachmentUrl?: string;
   attachmentName?: string;
+  skill?: string;
 }
 
 interface ActionTask {
@@ -999,6 +1000,8 @@ export function BeatriceAgent({
     googleTokenRef.current = googleToken;
   }, [googleToken]);
 
+  const settingsSelfUpdateRef = useRef(false);
+
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
@@ -1070,11 +1073,11 @@ export function BeatriceAgent({
           .eq('user_id', user.uid)
           .single();
         if (data) {
-          if (data.persona_name) setPersonaName(data.persona_name);
-          if (data.custom_prompt) setCustomPrompt(data.custom_prompt);
-          if (data.selected_voice) setSelectedVoice(data.selected_voice);
+          if (data.persona_name !== undefined && data.persona_name !== null) setPersonaName(data.persona_name);
+          if (data.custom_prompt !== undefined && data.custom_prompt !== null) setCustomPrompt(data.custom_prompt);
+          if (data.selected_voice !== undefined && data.selected_voice !== null) setSelectedVoice(data.selected_voice);
           if (typeof data.context_size === 'number') setContextSize(data.context_size);
-          if (data.user_title) { setUserTitle(data.user_title); localStorage.setItem('beatrice_userTitle', data.user_title); }
+          if (data.user_title !== undefined && data.user_title !== null) { setUserTitle(data.user_title); localStorage.setItem('beatrice_userTitle', data.user_title); }
           if (typeof data.censorship_enabled === 'boolean') setCensorshipEnabled(data.censorship_enabled);
         }
       } catch (e) {
@@ -1086,6 +1089,7 @@ export function BeatriceAgent({
   const [isSaving, setIsSaving] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [showProfilePage, setShowProfilePage] = useState(false);
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
   const [waStatus, setWaStatus] = useState<string>('not_found');
   const [waQrCode, setWaQrCode] = useState<string | null>(null);
   const [waPhone, setWaPhone] = useState<string | null>(null);
@@ -2142,10 +2146,11 @@ export function BeatriceAgent({
     markUserSpeechActivity();
     userTranscriptRef.current = text;
     setUserTranscript(text);
-    setMessages(prev => [...prev, { role: 'user', text, timestamp: new Date().toISOString(), sessionId: sessionIdRef.current }]);
-    await saveMessage('user', text).catch(() => {});
-    sendTextToLive(text);
+    setMessages(prev => [...prev, { role: 'user', text, timestamp: new Date().toISOString(), sessionId: sessionIdRef.current, skill: selectedSkill || undefined }]);
+    await saveMessage('user', text, undefined, undefined, selectedSkill).catch(() => {});
+    sendTextToLive(text, selectedSkill);
     setChatInput("");
+    setSelectedSkill(null);
   };
 
   const handleFileAttach = async (file: File) => {
@@ -2190,17 +2195,17 @@ export function BeatriceAgent({
           };
           reader.readAsDataURL(file);
         });
-        if (base64) sendVideoToLive(base64);
+        if (base64) sendVideoToLive(base64, selectedSkill);
       } else if (file.type === 'text/plain') {
         const text = await file.text();
-        sendTextToLive(`[Attached file: ${file.name}]\n${text}`);
+        sendTextToLive(`[Attached file: ${file.name}]\n${text}`, selectedSkill);
       } else {
-        sendTextToLive(`[User attached a file: ${file.name} (${file.type}, ${Math.round(file.size / 1024)}KB)]`);
+        sendTextToLive(`[User attached a file: ${file.name} (${file.type}, ${Math.round(file.size / 1024)}KB)]`, selectedSkill);
       }
 
       const messageText = `Attached file: ${file.name}`;
-      setMessages(prev => [...prev, { role: 'user', text: messageText, timestamp: new Date().toISOString(), sessionId: sessionIdRef.current }]);
-      await saveMessage('user', messageText, publicUrl, file.name);
+      setMessages(prev => [...prev, { role: 'user', text: messageText, timestamp: new Date().toISOString(), sessionId: sessionIdRef.current, skill: selectedSkill || undefined }]);
+      await saveMessage('user', messageText, publicUrl, file.name, selectedSkill).catch(() => {});
 
     } catch (err) {
       console.error('File attach error:', err);
@@ -2509,37 +2514,38 @@ export function BeatriceAgent({
         .maybeSingle();
 
       if (!settingsError && settingsData) {
-        if (settingsData.persona_name) setPersonaName(settingsData.persona_name);
-        if (settingsData.custom_prompt !== null) setCustomPrompt(settingsData.custom_prompt);
-        if (settingsData.selected_voice) setSelectedVoice(settingsData.selected_voice);
-        if (settingsData.context_size !== undefined) setContextSize(settingsData.context_size);
-        if (settingsData.user_title) { setUserTitle(settingsData.user_title); try { localStorage.setItem('beatrice_userTitle', settingsData.user_title); } catch {} }
-        if (settingsData.language) { onSetLanguage(settingsData.language); try { localStorage.setItem('beatrice_language', settingsData.language); } catch {} }
-        if (settingsData.whatsapp_permissions) setWaPermissions(prev => ({ ...prev, ...settingsData.whatsapp_permissions }));
-        if (settingsData.whatsapp_phone) setWaPhone(settingsData.whatsapp_phone);
-        if (settingsData.theme) { try { localStorage.setItem('beatrice_theme', settingsData.theme); if (settingsData.theme !== theme) onToggleTheme(); } catch {} }
-        if (settingsData.ambient_enabled !== undefined) { setAmbientEnabled(settingsData.ambient_enabled); try { localStorage.setItem('beatrice_ambient_enabled', String(settingsData.ambient_enabled)); } catch {} }
-        if (settingsData.ambient_volume !== undefined) { setAmbientVolume(settingsData.ambient_volume); try { localStorage.setItem('beatrice_ambient_volume', String(settingsData.ambient_volume)); } catch {} }
-        if (settingsData.censorship_enabled !== undefined) { setCensorshipEnabled(settingsData.censorship_enabled); try { localStorage.setItem('beatrice_censorship', String(settingsData.censorship_enabled)); } catch {} }
+        if (settingsData.persona_name !== undefined && settingsData.persona_name !== null) setPersonaName(settingsData.persona_name);
+        if (settingsData.custom_prompt !== undefined && settingsData.custom_prompt !== null) setCustomPrompt(settingsData.custom_prompt);
+        if (settingsData.selected_voice !== undefined && settingsData.selected_voice !== null) setSelectedVoice(settingsData.selected_voice);
+        if (settingsData.context_size !== undefined && settingsData.context_size !== null) setContextSize(settingsData.context_size);
+        if (settingsData.user_title !== undefined && settingsData.user_title !== null) { setUserTitle(settingsData.user_title); try { localStorage.setItem('beatrice_userTitle', settingsData.user_title); } catch {} }
+        if (settingsData.language !== undefined && settingsData.language !== null) { onSetLanguage(settingsData.language); try { localStorage.setItem('beatrice_language', settingsData.language); } catch {} }
+        if (settingsData.whatsapp_permissions !== undefined && settingsData.whatsapp_permissions !== null) setWaPermissions(prev => ({ ...prev, ...settingsData.whatsapp_permissions }));
+        if (settingsData.whatsapp_phone !== undefined && settingsData.whatsapp_phone !== null) setWaPhone(settingsData.whatsapp_phone);
+        if (settingsData.theme !== undefined && settingsData.theme !== null) { try { localStorage.setItem('beatrice_theme', settingsData.theme); if (settingsData.theme !== theme) onToggleTheme?.(); } catch {} }
+        if (settingsData.ambient_enabled !== undefined && settingsData.ambient_enabled !== null) { setAmbientEnabled(settingsData.ambient_enabled); try { localStorage.setItem('beatrice_ambient_enabled', String(settingsData.ambient_enabled)); } catch {} }
+        if (settingsData.ambient_volume !== undefined && settingsData.ambient_volume !== null) { setAmbientVolume(settingsData.ambient_volume); try { localStorage.setItem('beatrice_ambient_volume', String(settingsData.ambient_volume)); } catch {} }
+        if (settingsData.censorship_enabled !== undefined && settingsData.censorship_enabled !== null) { setCensorshipEnabled(settingsData.censorship_enabled); try { localStorage.setItem('beatrice_censorship', String(settingsData.censorship_enabled)); } catch {} }
       }
 
       const settingsChannel = supabase
         .channel(`settings_changes_${user.uid}_${Date.now()}`)
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_settings', filter: `user_id=eq.${user.uid}` }, (payload) => {
+          if (settingsSelfUpdateRef.current) { settingsSelfUpdateRef.current = false; return; }
           const s = payload.new as any;
           if (!s) return;
-          if (s.persona_name) setPersonaName(s.persona_name);
-          if (s.custom_prompt !== null) setCustomPrompt(s.custom_prompt);
-          if (s.selected_voice) setSelectedVoice(s.selected_voice);
-          if (s.context_size !== undefined) setContextSize(s.context_size);
-          if (s.user_title) { setUserTitle(s.user_title); try { localStorage.setItem('beatrice_userTitle', s.user_title); } catch {} }
-          if (s.language) { onSetLanguage(s.language); try { localStorage.setItem('beatrice_language', s.language); } catch {} }
-          if (s.whatsapp_permissions) setWaPermissions(prev => ({ ...prev, ...s.whatsapp_permissions }));
-          if (s.whatsapp_phone) setWaPhone(s.whatsapp_phone);
-          if (s.theme) { try { localStorage.setItem('beatrice_theme', s.theme); if (s.theme !== theme) onToggleTheme(); } catch {} }
-          if (s.ambient_enabled !== undefined) { setAmbientEnabled(s.ambient_enabled); try { localStorage.setItem('beatrice_ambient_enabled', String(s.ambient_enabled)); } catch {} }
-          if (s.ambient_volume !== undefined) { setAmbientVolume(s.ambient_volume); try { localStorage.setItem('beatrice_ambient_volume', String(s.ambient_volume)); } catch {} }
-          if (s.censorship_enabled !== undefined) { setCensorshipEnabled(s.censorship_enabled); try { localStorage.setItem('beatrice_censorship', String(s.censorship_enabled)); } catch {} }
+          if (s.persona_name !== undefined && s.persona_name !== null) setPersonaName(s.persona_name);
+          if (s.custom_prompt !== undefined && s.custom_prompt !== null) setCustomPrompt(s.custom_prompt);
+          if (s.selected_voice !== undefined && s.selected_voice !== null) setSelectedVoice(s.selected_voice);
+          if (s.context_size !== undefined && s.context_size !== null) setContextSize(s.context_size);
+          if (s.user_title !== undefined && s.user_title !== null) { setUserTitle(s.user_title); try { localStorage.setItem('beatrice_userTitle', s.user_title); } catch {} }
+          if (s.language !== undefined && s.language !== null) { onSetLanguage(s.language); try { localStorage.setItem('beatrice_language', s.language); } catch {} }
+          if (s.whatsapp_permissions !== undefined && s.whatsapp_permissions !== null) setWaPermissions(prev => ({ ...prev, ...s.whatsapp_permissions }));
+          if (s.whatsapp_phone !== undefined && s.whatsapp_phone !== null) setWaPhone(s.whatsapp_phone);
+          if (s.theme !== undefined && s.theme !== null) { try { localStorage.setItem('beatrice_theme', s.theme); if (s.theme !== theme) onToggleTheme?.(); } catch {} }
+          if (s.ambient_enabled !== undefined && s.ambient_enabled !== null) { setAmbientEnabled(s.ambient_enabled); try { localStorage.setItem('beatrice_ambient_enabled', String(s.ambient_enabled)); } catch {} }
+          if (s.ambient_volume !== undefined && s.ambient_volume !== null) { setAmbientVolume(s.ambient_volume); try { localStorage.setItem('beatrice_ambient_volume', String(s.ambient_volume)); } catch {} }
+          if (s.censorship_enabled !== undefined && s.censorship_enabled !== null) { setCensorshipEnabled(s.censorship_enabled); try { localStorage.setItem('beatrice_censorship', String(s.censorship_enabled)); } catch {} }
         })
         .subscribe();
 
@@ -2688,7 +2694,8 @@ export function BeatriceAgent({
     setIsSaving(true);
 
     try {
-      await supabase
+      settingsSelfUpdateRef.current = true;
+      const { error: upsertErr } = await supabase
         .from('user_settings')
         .upsert({
           user_id: user.uid,
@@ -2707,6 +2714,7 @@ export function BeatriceAgent({
           whatsapp_phone: waPhone || null,
           updated_at: new Date().toISOString(),
         });
+      if (upsertErr) throw upsertErr;
 
       try { localStorage.setItem('beatrice_userTitle', userTitle); } catch {}
       try { localStorage.setItem('beatrice_language', authLanguage); } catch {}
@@ -2733,8 +2741,8 @@ export function BeatriceAgent({
       setShowSettings(false);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to save settings';
+      console.error('Save settings error:', msg);
       callbacks?.onError?.(msg);
-      handleDbError(e, 'user_settings', 'upsert');
     } finally {
       setIsSaving(false);
     }
@@ -2748,6 +2756,7 @@ export function BeatriceAgent({
     });
 
     try {
+      settingsSelfUpdateRef.current = true;
       await supabase
         .from('user_settings')
         .upsert({
@@ -5177,6 +5186,7 @@ ${historyContext}
                         else {
                           onSetLanguage(lang);
                           try { localStorage.setItem('beatrice_language', lang); } catch {}
+                          settingsSelfUpdateRef.current = true;
                           await supabase.from('user_settings').upsert({
                             user_id: user.uid,
                             language: lang,
@@ -6808,6 +6818,7 @@ ${historyContext}
       <LiveCodingPreview
         visible={!!streamingTask}
         taskId={streamingTask?.taskId || ''}
+        userId={user?.uid || ''}
         appUrl={streamingTask?.appUrl}
         appName={streamingTask?.appName}
         onClose={() => setStreamingTask(null)}

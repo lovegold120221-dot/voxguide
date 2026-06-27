@@ -2,7 +2,7 @@
 // Central interface for all AI provider calls.
 // No upstream provider/model brand names in exports, logs, or errors.
 
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 
 // ── Private model registry (server-only, never exposed to frontend) ──
 // Internal upstream model IDs — never expose these names to users, docs, or logs.
@@ -10,9 +10,9 @@ const _m = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 50, 46, 53, 45,
 const _m2 = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 50, 46, 53, 45, 102, 108, 97, 115, 104);
 const _mv = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 50, 46, 53, 45, 102, 108, 97, 115, 104, 45, 118, 105, 115, 105, 111, 110, 45, 108, 97, 116, 101, 115, 116);
 const _mw = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 50, 46, 48, 45, 102, 108, 97, 115, 104, 45, 101, 120, 112);
-const _ms = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 51, 46, 49, 45, 102, 108, 97, 115, 104, 45, 108, 105, 116, 101);
 const _mf = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 50, 46, 48, 45, 102, 108, 97, 115, 104);
 const _mfl = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 50, 46, 48, 45, 102, 108, 97, 115, 104, 45, 108, 105, 116, 101);
+const _mfm = String.fromCharCode(103, 101, 109, 105, 110, 105, 45, 102, 108, 97, 115, 104, 45, 108, 105, 116, 101, 45, 108, 97, 116, 101, 115, 116);
 const _g4a = String.fromCharCode(103, 101, 109, 109, 97, 45, 52, 45, 50, 54, 98, 45, 105, 116);
 const _g4b = String.fromCharCode(103, 101, 109, 109, 97, 45, 52, 45, 51, 49, 98, 45, 105, 116);
 
@@ -25,6 +25,7 @@ const EBURON_MODEL_REGISTRY: Record<string, string | undefined> = {
   eburon_gemma_4_26b: process.env.EBURON_GEMMA_4_26B_MODEL_ID_INTERNAL || _g4a,
   eburon_gemma_4_31b: process.env.EBURON_GEMMA_4_31B_MODEL_ID_INTERNAL || _g4b,
   eburon_sandbox_free_fast: process.env.EBURON_SANDBOX_FREE_FAST_MODEL_ID_INTERNAL || _mfl,
+  eburon_fast_multimodal: process.env.EBURON_FAST_MULTIMODAL_MODEL_ID_INTERNAL || _mfm,
 };
 
 let _sandboxModelIndex = 0;
@@ -42,6 +43,7 @@ const EBURON_ALLOWED_MODELS = [
   'eburon_gemma_4_26b',
   'eburon_gemma_4_31b',
   'eburon_sandbox_free_fast',
+  'eburon_fast_multimodal',
   'eburon-coder-pro',
 ];
 

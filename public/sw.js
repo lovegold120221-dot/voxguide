@@ -1,5 +1,5 @@
-const APP_VERSION = '1.0.0';
-const CACHE_NAME = 'beatrice-v4';
+const APP_VERSION = '1.0.1';
+const CACHE_NAME = 'beatrice-v5';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -36,6 +36,43 @@ self.addEventListener('fetch', (event) => {
   // Always go to network for version check
   if (url.pathname === '/api/version') return;
 
+  // If it's a navigation request, fallback to index.html on error
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const ct = response.headers.get('Content-Type') || '';
+            const isCacheable =
+              ct.includes('javascript') ||
+              ct.includes('css') ||
+              ct.includes('svg') ||
+              ct.includes('image') ||
+              ct.includes('font') ||
+              event.request.url.includes('.js') ||
+              event.request.url.includes('.css') ||
+              event.request.url.includes('.svg') ||
+              event.request.url.includes('.woff2') ||
+              event.request.url.includes('.png') ||
+              event.request.method === 'GET' &&
+              (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/manifest.json');
+
+            if (isCacheable) {
+              const cloned = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, cloned));
+            }
+            return response;
+          }
+          throw new Error('Network response not ok');
+        })
+        .catch(() => {
+          return caches.match(event.request).then((cached) => cached || caches.match('/'));
+        })
+    );
+    return;
+  }
+
+  // For other requests (assets), try network, then cache
   event.respondWith(
     fetch(event.request)
       .then((response) => {
@@ -59,11 +96,12 @@ self.addEventListener('fetch', (event) => {
             const cloned = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(event.request, cloned));
           }
+          return response;
         }
         return response;
       })
       .catch(() => {
-        return caches.match(event.request).then((cached) => cached || caches.match('/'));
+        return caches.match(event.request);
       })
   );
 });
